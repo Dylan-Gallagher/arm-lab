@@ -1,6 +1,6 @@
 [package]
 name = "arm-lab"
-description = "Serial-chain kinematics written from scratch: chain extraction from compiled MuJoCo models, FK, geometric Jacobians, damped-least-squares IK"
+description = "Serial-chain manipulator stack written from scratch: FK, geometric Jacobians, DLS IK, RRT-Connect planning, MuJoCo collision checks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

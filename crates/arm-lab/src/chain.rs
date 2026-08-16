@@ -291,6 +291,18 @@ impl Chain {
         vec![0.0; self.dof()]
     }
 
+    /// Uniform sample inside the joint limits (slightly inset so we do not
+    /// sit on a bound). Used by IK restarts and RRT sampling.
+    pub fn sample_uniform(&self, rng: &mut crate::rng::Rng) -> Vec<f64> {
+        self.joint_limits()
+            .into_iter()
+            .map(|lim| match lim {
+                Some((lo, hi)) => rng.uniform(lo + 0.05, hi - 0.05),
+                None => rng.uniform(-3.0, 3.0),
+            })
+            .collect()
+    }
+
     /// Serialize the chain as a URDF robot description.
     ///
     /// Used by the test suite to cross-check this crate's FK against the

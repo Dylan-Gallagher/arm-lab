@@ -28,6 +28,12 @@ impl Rng {
     pub fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (hi - lo) * self.next_f64()
     }
+
+    /// Uniform integer in `[lo, hi)`.
+    pub fn uniform_usize(&mut self, lo: usize, hi: usize) -> usize {
+        debug_assert!(hi > lo);
+        lo + (self.next_u64() as usize % (hi - lo))
+    }
 }
 
 #[cfg(test)]

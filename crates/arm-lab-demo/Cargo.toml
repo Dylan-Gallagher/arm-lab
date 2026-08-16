@@ -1,14 +1,10 @@
 [package]
 name = "arm-lab-demo"
-description = "Demo 1: UR5e in MuJoCo steps its end effector through IK-solved target targets, with Rerun telemetry"
+description = "Demos: UR5e IK servo (demo1) and RRT-Connect pillar dodge (demo2), with Rerun telemetry"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-
-[[bin]]
-name = "demo1"
-path = "src/main.rs"
 
 [dependencies]
 arm-lab = { path = "../arm-lab" }

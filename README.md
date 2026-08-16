@@ -1,12 +1,12 @@
 # arm-lab
 
-A serial-chain manipulator stack written **from scratch in Rust** — no ROS, no MoveIt, no kinematics library.
+A serial-chain manipulator stack written **from scratch in Rust** — no ROS, no MoveIt, no kinematics library, no off-the-shelf planner.
 
-![Demo 1 — UR5e stepping through IK-solved targets, simulated in MuJoCo](docs/demo1.gif)
+![Demo 2 — UR5e dodging a pillar. RRT-Connect in joint space, MuJoCo collision checks, shortcut path, gravity-compensated servo](docs/demo2.gif)
 
-The kinematic chain (offsets, joint axes, limits, end-effector site) is **extracted from the compiled MuJoCo model** — never hand-entered as DH parameters — so the geometry used by the algorithms is guaranteed identical to the one the physics simulates. Forward kinematics, geometric Jacobians, and damped-least-squares inverse kinematics are implemented in this repo on `nalgebra` transforms. The independent `k` + `urdf-rs` stack is used **only inside the test suite** as a cross-check.
+The kinematic chain (offsets, joint axes, limits, end-effector site) is **extracted from the compiled MuJoCo model** — never hand-entered as DH parameters — so the geometry used by the algorithms is guaranteed identical to the one the physics simulates. Forward kinematics, geometric Jacobians, damped-least-squares inverse kinematics, and RRT-Connect with shortcutting are implemented in this repo. Collision checks call `mj_collision` on interpolated joint-space states. The independent `k` + `urdf-rs` stack is used **only inside the test suite** as a cross-check of FK.
 
-Demo 1 (above): the IK solution for each target is commanded into MuJoCo's position actuators, with exact model-based gravity/Coriolis feedforward (`qfrc_bias` → `qfrc_applied`, as a real controller's gravity compensation would); the simulated UR5e then moves itself to the target. Rerun records link transforms, EE pose, targets, and live error plots (`demo_output/demo1.rrd`).
+Demo 2 (above): a pillar sits on the home shoulder-pan sweep. The joint-space straight line from home to a +1.1 rad pan collides; RRT-Connect finds a 3-waypoint path around it in **~7 ms**, the polyline is tracked in MuJoCo. Demo 1 (IK target sequence, no obstacles) is in [`docs/demo1.gif`](docs/demo1.gif).
 
 ## Numbers (measured, reproducible via `cargo test`)
 
@@ -18,48 +18,60 @@ Demo 1 (above): the IK solution for each target is commanded into MuJoCo's posit
 | FK vs MuJoCo body/site poses (random configurations) | agreement to < 1e-9 |
 | Geometric Jacobian vs numerical differentiation | agreement to < 1e-5 |
 | Demo 1 final Cartesian error per target (after gravity compensation) | ≤ 1e-4 m |
+| RRT-Connect, cluttered UR5e (pillar on the pan sweep), 11 seeds | **median 6.7 ms** (min 3.2, max 13.4) |
+| Same query: tree size → shortcut | 64 nodes → **3 waypoints** |
+| Planner determinism | identical path given identical seed |
 
-Failures in the 2.2% are targets reachable only through joint-limit-blocked regions — the solver honors limits by construction (clamped every iteration, asserted in tests).
+The 1 s median planning-time exit criterion is met by two orders of magnitude. Failures in the 2.2% IK slice are targets reachable only through joint-limit-blocked regions — the solver honors limits by construction (clamped every iteration, asserted in tests).
 
 ## Layout
 
 ```
-crates/arm-lab        the library: chain extraction, FK, Jacobians, DLS IK
-crates/arm-lab-demo   Demo 1 binary: MuJoCo servo loop + Rerun telemetry + offscreen GIF render
-assets/ur5e           vendored MuJoCo-Menagerie UR5e (see license note below)
+crates/arm-lab        the library: chain extraction, FK, Jacobians, DLS IK, RRT-Connect, MuJoCo collision
+crates/arm-lab-demo   demo1 (IK servo) and demo2 (pillar dodge), Rerun + offscreen GIF
+assets/ur5e           vendored MuJoCo-Menagerie UR5e + cluttered scene (see license note below)
 ```
 
 ## Run it
 
 ```bash
-# library tests (incl. cross-checks and the 1000-target IK table)
+# library tests (cross-checks, 1000-target IK table, planner correctness + timing)
 cargo test -p arm-lab
 
-# demo, headless: writes demo_output/demo1.rrd
-cargo run --release -p arm-lab-demo
+# demo 1, headless: writes demo_output/demo1.rrd
+cargo run --release -p arm-lab-demo --bin demo1
 
-# demo + offscreen video: also writes demo_output/demo1.gif (MuJoCo EGL + ffmpeg)
-cargo run --release -p arm-lab-demo -- --render
+# demo 1 + offscreen GIF
+cargo run --release -p arm-lab-demo --bin demo1 -- --render
 
-# demo, streaming live into a Rerun viewer started with `rerun`
-cargo run --release -p arm-lab-demo -- --connect
+# demo 2: plan around the pillar, execute, write demo_output/demo2.rrd
+cargo run --release -p arm-lab-demo --bin demo2
+
+# demo 2 + offscreen GIF
+cargo run --release -p arm-lab-demo --bin demo2 -- --render
+
+# stream live into a Rerun viewer started with `rerun`
+cargo run --release -p arm-lab-demo --bin demo2 -- --connect
 ```
 
-Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time (`MUJOCO_DOWNLOAD_DIR`, and `LD_LIBRARY_PATH` pointing at its `lib/` at runtime — see the [mujoco-rs docs](https://github.com/sebcrozet/mujoco-rs)).
+Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time (`MUJOCO_DOWNLOAD_DIR`, and `LD_LIBRARY_PATH` pointing at its `lib/` at runtime — see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs)).
 
 ## Design notes
 
 - **Chain extraction, not re-modeling.** `Chain::from_mujoco` walks `body_parentid` from the tip body to the world, collecting static transforms, hinge axes, anchors, and limits from the *compiled* model, plus the EE site as the tool frame. One source of truth for geometry.
 - **DLS IK with adaptive damping.** Each step solves `Δq = Jᵀ(JJᵀ + λ²I)⁻¹e` with a diagonal nullspace bias toward a rest pose; λ scales down with the error so the endgame converges Newton-like while near-singular regions stay damped. Joint limits are clamped every iteration; seeded random restarts (TRAC-IK style) recover from bad basins.
-- **Deterministic.** Restart sampling uses an in-repo xorshift RNG with a fixed seed; given the same model and target sequence, results are bit-reproducible.
-- **Physics-side servo.** The demo commands joint positions and applies the exact MuJoCo bias force as feedforward — the position actuators' residual steady-state error (gravity sag) disappears, leaving ≤ 0.1 mm tracking at the tool.
+- **RRT-Connect, from scratch.** Two trees grow toward each other (Kuffner & LaValle 2000). `EXTEND` takes one joint-space step; `CONNECT` greedily repeats it. Edges are collision-checked by interpolating at `resolution` and calling MuJoCo `mj_collision` on each state. Greedy then random shortcutting removes redundant waypoints; the path is densified to the same resolution for execution. Sampling uses the in-repo SplitMix64 RNG — same seed, same path.
+- **Collision filter.** Only contacts that involve a robot collision geom (`contype ≠ 0`, attached to a chain body, not the world) count. Floor-vs-pillar contacts are ignored; parent–child pairs are already excluded by MuJoCo. Visual meshes never participate.
+- **Deterministic.** Restart sampling, RRT sampling, and random shortcutting all use the in-repo RNG with a fixed seed.
+- **Physics-side servo.** The demos command joint positions and apply the exact MuJoCo bias force as feedforward. Demo 2 tracks the planned polyline at constant joint-space speed (linear time-parameterization). Jerk-limited parameterization is next.
 
 ## Roadmap
 
 - [x] Demo 1: FK + DLS IK, Rerun telemetry, offscreen-rendered GIF
-- [ ] RRT-Connect planning with collision checks; jerk-limited trajectories; PD tracking
+- [x] RRT-Connect with MuJoCo collision checks and shortcutting (Demo 2)
+- [ ] Jerk-limited trajectories; joint-space PD tracking
 - [ ] Pick-and-place with obstacle dodging; benchmark tables
 
 ## License & assets
 
-Code: Apache-2.0. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`.
+Code: Apache-2.0. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`. `scene_cluttered.xml` is original to this repo.

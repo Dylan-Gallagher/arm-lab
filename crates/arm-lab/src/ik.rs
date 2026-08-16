@@ -107,7 +107,7 @@ pub fn solve_ik(
     }
     let mut rng = crate::rng::Rng::new(cfg.seed ^ 0x1CF7EE);
     for _ in 0..cfg.restarts {
-        let q_seed = random_seed(chain, &mut rng);
+        let q_seed = chain.sample_uniform(&mut rng);
         let res = solve_ik_attempt(chain, target, &q_seed, q_rest, cfg);
         if res.converged {
             return res;
@@ -117,17 +117,6 @@ pub fn solve_ik(
         }
     }
     best
-}
-
-fn random_seed(chain: &Chain, rng: &mut crate::rng::Rng) -> Vec<f64> {
-    chain
-        .joint_limits()
-        .into_iter()
-        .map(|lim| match lim {
-            Some((lo, hi)) => rng.uniform(lo + 0.05, hi - 0.05),
-            None => rng.uniform(-3.0, 3.0),
-        })
-        .collect()
 }
 
 fn solve_ik_attempt(
