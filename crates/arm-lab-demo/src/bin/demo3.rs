@@ -1,7 +1,7 @@
 //! Demo 3 — pick-and-place around a pillar, from scratch.
 //!
 //! IK solves grasp poses, RRT-Connect carries the cube around a pillar that
-//! blocks the joint-space interpolant, a jerk-limited S-curve times every
+//! blocks the joint-space interpolant, a jerk-bounded scalar S-curve times every
 //! segment, and a mocap weld stands in for a gripper (scripted attach, not
 //! contact-rich grasping).
 //!

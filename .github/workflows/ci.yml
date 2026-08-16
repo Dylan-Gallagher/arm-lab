@@ -20,6 +20,11 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # mujoco-rs can be restored from target/ without rerunning its build
+          # script, so cache the downloaded runtime under the same fresh key.
+          shared-key: mujoco-3.9.0-v1
+          cache-directories: ${{ env.MUJOCO_DOWNLOAD_DIR }}
 
       - name: Format
         run: cargo fmt --all -- --check

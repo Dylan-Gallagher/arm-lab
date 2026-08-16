@@ -1,4 +1,5 @@
 /target
+/.mujoco-cache
 *.rrd
 *.mp4
 demo_output/
