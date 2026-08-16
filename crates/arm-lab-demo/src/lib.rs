@@ -57,6 +57,32 @@ pub fn set_ctrl_pd(
     }
 }
 
+/// Command one timed sample, run `before_step` (mocap weld, etc.), step physics.
+/// Returns the L2 joint-space tracking error after the step.
+#[allow(clippy::too_many_arguments)]
+pub fn traj_step(
+    data: &mut MjData<&MjModel>,
+    chain: &Chain,
+    actuators: &[&str],
+    q_des: &[f64],
+    qd_des: &[f64],
+    kv_over_kp: f64,
+    dof_adrs: &[usize],
+    before_step: impl FnOnce(&mut MjData<&MjModel>),
+) -> f64 {
+    set_ctrl_pd(data, actuators, q_des, qd_des, kv_over_kp);
+    before_step(data);
+    gravity_compensate(data, dof_adrs);
+    data.step();
+    let q_meas = read_q(data, chain);
+    q_meas
+        .iter()
+        .zip(q_des.iter())
+        .map(|(a, b)| (a - b).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
 pub fn init_recording(
     app: &'static str,
     mode: &str,

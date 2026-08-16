@@ -1,6 +1,6 @@
 [package]
 name = "arm-lab-demo"
-description = "Demos: UR5e IK servo (demo1) and RRT-Connect pillar dodge (demo2), with Rerun telemetry"
+description = "Demos: UR5e IK servo (demo1), RRT-Connect pillar dodge (demo2), pick-and-place (demo3)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

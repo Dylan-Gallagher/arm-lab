@@ -2,11 +2,11 @@
 
 A serial-chain manipulator stack written **from scratch in Rust** — no ROS, no MoveIt, no kinematics library, no off-the-shelf planner.
 
-![Demo 2 — UR5e dodging a pillar. RRT-Connect in joint space, jerk-limited S-curve, MuJoCo collision checks, PD + velocity feedforward](docs/demo2.gif)
+![Demo 3 — UR5e pick-and-place around a pillar. IK, RRT-Connect, jerk-limited S-curve, PD + velocity feedforward](docs/demo3.gif)
 
 The kinematic chain (offsets, joint axes, limits, end-effector site) is **extracted from the compiled MuJoCo model** — never hand-entered as DH parameters — so the geometry used by the algorithms is guaranteed identical to the one the physics simulates. Forward kinematics, geometric Jacobians, damped-least-squares inverse kinematics, RRT-Connect with shortcutting, and a rest-to-rest 7-phase S-curve are implemented in this repo. Collision checks call `mj_collision` on interpolated joint-space states. The independent `k` + `urdf-rs` stack is used **only inside the test suite** as a cross-check of FK.
 
-Demo 2 (above): a pillar sits on the home shoulder-pan sweep. The joint-space straight line from home to a +1.1 rad pan collides; RRT-Connect finds a 3-waypoint path around it in **~7 ms**; a jerk-limited S-curve times the polyline (3.50 s, v ≤ 0.55 rad/s); MuJoCo tracks it to **0.005 rad**. Demo 1 (IK target sequence, no obstacles) is in [`docs/demo1.gif`](docs/demo1.gif).
+Demo 3 (above): IK solves pick and place poses; the joint-space straight line between them hits a pillar on the table; RRT-Connect carries the cube around it in **~4 ms**; every segment is timed with an S-curve and tracked to **0.004 rad**. The cube is a mocap weld (scripted attach, not contact-rich grasping). Demo 2 (pillar dodge, no object) is in [`docs/demo2.gif`](docs/demo2.gif). Demo 1 (IK target sequence) is in [`docs/demo1.gif`](docs/demo1.gif).
 
 ## Numbers (measured, reproducible via `cargo test`)
 
@@ -24,6 +24,8 @@ Demo 2 (above): a pillar sits on the home shoulder-pan sweep. The joint-space st
 | Demo 2 S-curve (seed `20260816`, v≤0.55 a≤1.8 j≤8) | **1751 samples, 3.50 s**, peak joint \|qd\| 0.550 rad/s |
 | Demo 2 tracking (PD + vel FF + gravity compensation) | worst 0.0046 rad · final goal 0.0002 rad |
 | Timed-trajectory determinism | identical `q(t)` given identical seed + limits |
+| Demo 3 carry (pick→place around table pillar, seed `20260816`) | **~4 ms**, 4 waypoints after shortcut |
+| Demo 3 tracking (full pick-and-place) | worst 0.0037 rad |
 
 The 1 s median planning-time exit criterion is met by two orders of magnitude. Failures in the 2.2% IK slice are targets reachable only through joint-limit-blocked regions — the solver honors limits by construction (clamped every iteration, asserted in tests).
 
@@ -31,8 +33,8 @@ The 1 s median planning-time exit criterion is met by two orders of magnitude. F
 
 ```
 crates/arm-lab        the library: chain extraction, FK, Jacobians, DLS IK, RRT-Connect, S-curve, MuJoCo collision
-crates/arm-lab-demo   demo1 (IK servo) and demo2 (pillar dodge + S-curve), Rerun + offscreen GIF
-assets/ur5e           vendored MuJoCo-Menagerie UR5e + cluttered scene (see license note below)
+crates/arm-lab-demo   demo1 (IK), demo2 (pillar dodge), demo3 (pick-and-place), Rerun + offscreen GIF
+assets/ur5e           vendored MuJoCo-Menagerie UR5e + cluttered / pick-place scenes (see license)
 ```
 
 ## Run it
@@ -53,8 +55,14 @@ cargo run --release -p arm-lab-demo --bin demo2
 # demo 2 + offscreen GIF
 cargo run --release -p arm-lab-demo --bin demo2 -- --render
 
+# demo 3: pick-and-place around a pillar, write demo_output/demo3.rrd
+cargo run --release -p arm-lab-demo --bin demo3
+
+# demo 3 + offscreen GIF
+cargo run --release -p arm-lab-demo --bin demo3 -- --render
+
 # stream live into a Rerun viewer started with `rerun`
-cargo run --release -p arm-lab-demo --bin demo2 -- --connect
+cargo run --release -p arm-lab-demo --bin demo3 -- --connect
 ```
 
 Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time (`MUJOCO_DOWNLOAD_DIR`, and `LD_LIBRARY_PATH` pointing at its `lib/` at runtime — see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs)).
@@ -67,15 +75,16 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - **Collision filter.** Only contacts that involve a robot collision geom (`contype ≠ 0`, attached to a chain body, not the world) count. Floor-vs-pillar contacts are ignored; parent–child pairs are already excluded by MuJoCo. Visual meshes never participate.
 - **Deterministic.** Restart sampling, RRT sampling, and random shortcutting all use the in-repo RNG with a fixed seed. The timed trajectory is bit-stable given the same seed and limits (CI golden test).
 - **S-curve time-parameterization.** A rest-to-rest 7-phase bang-bang-jerk profile times the scalar path length `s ∈ [0, L]`. Per-joint `(v, a, j)` limits are converted to path-space limits by the steepest `|dqᵢ/ds|` on the polyline, so no joint exceeds its bound along an edge. Tangent discontinuities at corners produce a one-sample acceleration spike; shortcutting keeps those corners to one or two.
-- **Physics-side servo.** The demos apply the exact MuJoCo bias force as gravity/Coriolis feedforward. Demo 2 commands the Menagerie position actuators as a PD tracker with velocity feedforward: `ctrl = q_des + (kv/kp)·qd_des` yields `τ = kp(q_des − q) + kv(qd_des − qd)`. Worst joint-space tracking on the cluttered query is 0.0046 rad.
+- **Physics-side servo.** The demos apply the exact MuJoCo bias force as gravity/Coriolis feedforward. Position actuators are commanded as a PD tracker with velocity feedforward: `ctrl = q_des + (kv/kp)·qd_des` yields `τ = kp(q_des − q) + kv(qd_des − qd)`. Worst joint-space tracking is 0.0046 rad (Demo 2) and 0.0037 rad (Demo 3).
+- **Scripted grasp.** Demo 3 welds a mocap cube to the EE after the pick descend and parks it on the place pad after the place descend. That is a kinematics/planning demo, not contact-rich grasping. The carry query inflates collision clearance by 4 cm so the cube volume clears the pillar.
 
 ## Roadmap
 
 - [x] Demo 1: FK + DLS IK, Rerun telemetry, offscreen-rendered GIF
 - [x] RRT-Connect with MuJoCo collision checks and shortcutting (Demo 2)
 - [x] Jerk-limited S-curve trajectories; joint-space PD + velocity feedforward
-- [ ] Pick-and-place with obstacle dodging; benchmark tables
+- [x] Pick-and-place with obstacle dodging; benchmark tables
 
 ## License & assets
 
-Code: Apache-2.0. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`. `scene_cluttered.xml` is original to this repo.
+Code: Apache-2.0. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`. `scene_cluttered.xml` and `scene_pickplace.xml` are original to this repo.
