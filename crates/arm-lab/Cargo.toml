@@ -1,0 +1,20 @@
+[package]
+name = "arm-lab"
+description = "Serial-chain kinematics written from scratch: chain extraction from compiled MuJoCo models, FK, geometric Jacobians, damped-least-squares IK"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+nalgebra = { workspace = true }
+mujoco-rs = { workspace = true }
+
+[dev-dependencies]
+# Cross-check dependencies: used ONLY in tests to validate the in-repo
+# implementations against an independent reference, never in the library.
+k = "0.32"
+urdf-rs = "0.9"
+
+[lints]
+workspace = true

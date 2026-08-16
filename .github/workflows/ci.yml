@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  MUJOCO_DOWNLOAD_DIR: /home/runner/.local/share/mujoco-rs
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The mujoco-rs build script auto-downloads MuJoCo (MUJOCO_DOWNLOAD_DIR);
+      # tests need its shared library at runtime.
+      - name: Test (library)
+        run: |
+          export LD_LIBRARY_PATH="$MUJOCO_DOWNLOAD_DIR/mujoco-3.9.0/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          cargo test --release -p arm-lab
+
+      - name: Build demo (no GL runtime needed to compile)
+        run: cargo build --release -p arm-lab-demo
