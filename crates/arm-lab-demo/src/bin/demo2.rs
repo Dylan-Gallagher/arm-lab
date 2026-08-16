@@ -2,8 +2,9 @@
 //!
 //! Joint-space RRT-Connect plans a collision-free path for the UR5e around a
 //! pillar that blocks the straight-line interpolant from home to a panned
-//! goal. The path is shortcut, densified, then tracked in MuJoCo with the
-//! same gravity-compensated position servo as Demo 1.
+//! goal. The path is shortcut, densified, timed with a jerk-limited S-curve,
+//! and tracked with a gravity-compensated PD servo (velocity feedforward
+//! through the Menagerie position actuators).
 //!
 //! ```text
 //! cargo run --release -p arm-lab-demo --bin demo2
@@ -14,10 +15,11 @@ use std::path::Path;
 
 use arm_lab::kinematics::fk;
 use arm_lab::plan::{PlanStatus, edge_free, rrt_connect};
+use arm_lab::traj::{TrajLimits, time_parameterize};
 use arm_lab::{Chain, CollisionChecker, PlanConfig};
 use arm_lab_demo::{
     GIF_FPS, RENDER_EVERY, RENDER_H, RENDER_W, capture_frame, encode_gif, gravity_compensate,
-    init_recording, log_transform, parse_args, read_q, set_ctrl,
+    init_recording, log_transform, parse_args, read_q, set_ctrl, set_ctrl_pd,
 };
 use mujoco_rs::prelude::*;
 use mujoco_rs::renderer::MjRenderer;
@@ -36,10 +38,9 @@ const ACTUATORS: [&str; 6] = [
     "wrist_3",
 ];
 
-/// Joint-space L2 speed of the executed polyline (rad/s).
-const SPEED: f64 = 0.45;
+const KV_OVER_KP: f64 = 0.2; // Menagerie size3 and size1 both have kv/kp = 0.2
 const LOG_EVERY: usize = 2;
-const SETTLE_STEPS: usize = 80;
+const SETTLE_STEPS: usize = 150;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -93,6 +94,21 @@ fn main() {
         plan.shortcut_removed,
         plan.cost,
         plan.path.len()
+    );
+
+    let limits = TrajLimits {
+        v_max: 0.55,
+        a_max: 1.8,
+        j_max: 8.0,
+    };
+    let traj = time_parameterize(&plan.path, &limits, dt);
+    println!(
+        "[demo2] S-curve: {:.2} s · {} samples @ dt={dt} · limits v≤{} a≤{} j≤{}",
+        traj.duration,
+        traj.len(),
+        limits.v_max,
+        limits.a_max,
+        limits.j_max
     );
 
     // ---- Rerun + renderer --------------------------------------------------
@@ -177,65 +193,59 @@ fn main() {
 
     let mut step_idx: usize = 0;
     let mut worst_track = 0.0f64;
-    let mut sim_steps: usize = 0;
+    let mut peak_qd = 0.0f64;
 
-    for w in plan.path.windows(2) {
-        let dist = arm_lab::plan::path_length(w);
-        let n_steps = ((dist / SPEED) / dt).ceil().max(1.0) as usize;
-        for s in 0..n_steps {
-            let t = (s + 1) as f64 / n_steps as f64;
-            let q_cmd: Vec<f64> = w[0]
-                .iter()
-                .zip(w[1].iter())
-                .map(|(a, b)| a + t * (b - a))
-                .collect();
-            set_ctrl(&mut data, &ACTUATORS, &q_cmd);
-            gravity_compensate(&mut data, &dof_adrs);
-            data.step();
-            sim_steps += 1;
+    for (i, q_des) in traj.q.iter().enumerate() {
+        let qd_des = &traj.qd[i];
+        set_ctrl_pd(&mut data, &ACTUATORS, q_des, qd_des, KV_OVER_KP);
+        gravity_compensate(&mut data, &dof_adrs);
+        data.step();
 
-            if renderer.is_some() && sim_steps.is_multiple_of(RENDER_EVERY) {
-                capture_frame(&mut renderer, &mut data, frame_dir, &mut frame_idx);
-            }
-            if !sim_steps.is_multiple_of(LOG_EVERY) {
-                continue;
-            }
-            let q_meas = read_q(&data, &chain);
-            let (poses, ee) = arm_lab::kinematics::fk_full(&chain, &q_meas);
-            rec.set_time_sequence("step", step_idx as i64);
-            for (pose, path) in poses.iter().zip(link_paths.iter()) {
-                log_transform(&rec, path, &pose.world);
-            }
-            log_transform(&rec, "world/ee", &ee);
-            rec.log(
-                "world/ee/point",
-                &rerun::Points3D::new([[ee.translation.x, ee.translation.y, ee.translation.z]]),
-            )
-            .ok();
-
-            let track_err: f64 = q_meas
-                .iter()
-                .zip(q_cmd.iter())
-                .map(|(a, b)| (a - b).powi(2))
-                .sum::<f64>()
-                .sqrt();
-            worst_track = worst_track.max(track_err);
-            rec.log(
-                "plot/joint_track_err_rad",
-                &rerun::Scalars::single(track_err),
-            )
-            .ok();
-            rec.log(
-                "plot/ee_height_m",
-                &rerun::Scalars::single(ee.translation.z),
-            )
-            .ok();
-            rec.log("plot/ee_x_m", &rerun::Scalars::single(ee.translation.x))
-                .ok();
-            rec.log("plot/ee_y_m", &rerun::Scalars::single(ee.translation.y))
-                .ok();
-            step_idx += 1;
+        if renderer.is_some() && i.is_multiple_of(RENDER_EVERY) {
+            capture_frame(&mut renderer, &mut data, frame_dir, &mut frame_idx);
         }
+        if !i.is_multiple_of(LOG_EVERY) {
+            continue;
+        }
+        let q_meas = read_q(&data, &chain);
+        let (poses, ee) = arm_lab::kinematics::fk_full(&chain, &q_meas);
+        rec.set_time_sequence("step", step_idx as i64);
+        for (pose, path) in poses.iter().zip(link_paths.iter()) {
+            log_transform(&rec, path, &pose.world);
+        }
+        log_transform(&rec, "world/ee", &ee);
+        rec.log(
+            "world/ee/point",
+            &rerun::Points3D::new([[ee.translation.x, ee.translation.y, ee.translation.z]]),
+        )
+        .ok();
+
+        let track_err: f64 = q_meas
+            .iter()
+            .zip(q_des.iter())
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        worst_track = worst_track.max(track_err);
+        let speed: f64 = qd_des.iter().map(|v| v * v).sum::<f64>().sqrt();
+        peak_qd = peak_qd.max(speed);
+        rec.log(
+            "plot/joint_track_err_rad",
+            &rerun::Scalars::single(track_err),
+        )
+        .ok();
+        rec.log("plot/qd_norm_rad_s", &rerun::Scalars::single(speed))
+            .ok();
+        rec.log(
+            "plot/ee_height_m",
+            &rerun::Scalars::single(ee.translation.z),
+        )
+        .ok();
+        rec.log("plot/ee_x_m", &rerun::Scalars::single(ee.translation.x))
+            .ok();
+        rec.log("plot/ee_y_m", &rerun::Scalars::single(ee.translation.y))
+            .ok();
+        step_idx += 1;
     }
 
     // Hold the goal so the GIF ends on a still frame.
@@ -256,8 +266,9 @@ fn main() {
         .sum::<f64>()
         .sqrt();
     println!(
-        "[demo2] executed {sim_steps} sim steps ({:.2} s) · worst joint-track {worst_track:.4} rad · final goal err {goal_err:.4} rad",
-        sim_steps as f64 * dt
+        "[demo2] executed {} samples ({:.2} s) · peak ‖qd‖ {peak_qd:.3} rad/s · worst joint-track {worst_track:.4} rad · final goal err {goal_err:.4} rad",
+        traj.len(),
+        traj.duration
     );
 
     if do_render {

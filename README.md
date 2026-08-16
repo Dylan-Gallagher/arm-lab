@@ -2,11 +2,11 @@
 
 A serial-chain manipulator stack written **from scratch in Rust** — no ROS, no MoveIt, no kinematics library, no off-the-shelf planner.
 
-![Demo 2 — UR5e dodging a pillar. RRT-Connect in joint space, MuJoCo collision checks, shortcut path, gravity-compensated servo](docs/demo2.gif)
+![Demo 2 — UR5e dodging a pillar. RRT-Connect in joint space, jerk-limited S-curve, MuJoCo collision checks, PD + velocity feedforward](docs/demo2.gif)
 
-The kinematic chain (offsets, joint axes, limits, end-effector site) is **extracted from the compiled MuJoCo model** — never hand-entered as DH parameters — so the geometry used by the algorithms is guaranteed identical to the one the physics simulates. Forward kinematics, geometric Jacobians, damped-least-squares inverse kinematics, and RRT-Connect with shortcutting are implemented in this repo. Collision checks call `mj_collision` on interpolated joint-space states. The independent `k` + `urdf-rs` stack is used **only inside the test suite** as a cross-check of FK.
+The kinematic chain (offsets, joint axes, limits, end-effector site) is **extracted from the compiled MuJoCo model** — never hand-entered as DH parameters — so the geometry used by the algorithms is guaranteed identical to the one the physics simulates. Forward kinematics, geometric Jacobians, damped-least-squares inverse kinematics, RRT-Connect with shortcutting, and a rest-to-rest 7-phase S-curve are implemented in this repo. Collision checks call `mj_collision` on interpolated joint-space states. The independent `k` + `urdf-rs` stack is used **only inside the test suite** as a cross-check of FK.
 
-Demo 2 (above): a pillar sits on the home shoulder-pan sweep. The joint-space straight line from home to a +1.1 rad pan collides; RRT-Connect finds a 3-waypoint path around it in **~7 ms**, the polyline is tracked in MuJoCo. Demo 1 (IK target sequence, no obstacles) is in [`docs/demo1.gif`](docs/demo1.gif).
+Demo 2 (above): a pillar sits on the home shoulder-pan sweep. The joint-space straight line from home to a +1.1 rad pan collides; RRT-Connect finds a 3-waypoint path around it in **~7 ms**; a jerk-limited S-curve times the polyline (3.50 s, v ≤ 0.55 rad/s); MuJoCo tracks it to **0.005 rad**. Demo 1 (IK target sequence, no obstacles) is in [`docs/demo1.gif`](docs/demo1.gif).
 
 ## Numbers (measured, reproducible via `cargo test`)
 
@@ -21,14 +21,17 @@ Demo 2 (above): a pillar sits on the home shoulder-pan sweep. The joint-space st
 | RRT-Connect, cluttered UR5e (pillar on the pan sweep), 11 seeds | **median 6.7 ms** (min 3.2, max 13.4) |
 | Same query: tree size → shortcut | 64 nodes → **3 waypoints** |
 | Planner determinism | identical path given identical seed |
+| Demo 2 S-curve (seed `20260816`, v≤0.55 a≤1.8 j≤8) | **1751 samples, 3.50 s**, peak joint \|qd\| 0.550 rad/s |
+| Demo 2 tracking (PD + vel FF + gravity compensation) | worst 0.0046 rad · final goal 0.0002 rad |
+| Timed-trajectory determinism | identical `q(t)` given identical seed + limits |
 
 The 1 s median planning-time exit criterion is met by two orders of magnitude. Failures in the 2.2% IK slice are targets reachable only through joint-limit-blocked regions — the solver honors limits by construction (clamped every iteration, asserted in tests).
 
 ## Layout
 
 ```
-crates/arm-lab        the library: chain extraction, FK, Jacobians, DLS IK, RRT-Connect, MuJoCo collision
-crates/arm-lab-demo   demo1 (IK servo) and demo2 (pillar dodge), Rerun + offscreen GIF
+crates/arm-lab        the library: chain extraction, FK, Jacobians, DLS IK, RRT-Connect, S-curve, MuJoCo collision
+crates/arm-lab-demo   demo1 (IK servo) and demo2 (pillar dodge + S-curve), Rerun + offscreen GIF
 assets/ur5e           vendored MuJoCo-Menagerie UR5e + cluttered scene (see license note below)
 ```
 
@@ -62,14 +65,15 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - **DLS IK with adaptive damping.** Each step solves `Δq = Jᵀ(JJᵀ + λ²I)⁻¹e` with a diagonal nullspace bias toward a rest pose; λ scales down with the error so the endgame converges Newton-like while near-singular regions stay damped. Joint limits are clamped every iteration; seeded random restarts (TRAC-IK style) recover from bad basins.
 - **RRT-Connect, from scratch.** Two trees grow toward each other (Kuffner & LaValle 2000). `EXTEND` takes one joint-space step; `CONNECT` greedily repeats it. Edges are collision-checked by interpolating at `resolution` and calling MuJoCo `mj_collision` on each state. Greedy then random shortcutting removes redundant waypoints; the path is densified to the same resolution for execution. Sampling uses the in-repo SplitMix64 RNG — same seed, same path.
 - **Collision filter.** Only contacts that involve a robot collision geom (`contype ≠ 0`, attached to a chain body, not the world) count. Floor-vs-pillar contacts are ignored; parent–child pairs are already excluded by MuJoCo. Visual meshes never participate.
-- **Deterministic.** Restart sampling, RRT sampling, and random shortcutting all use the in-repo RNG with a fixed seed.
-- **Physics-side servo.** The demos command joint positions and apply the exact MuJoCo bias force as feedforward. Demo 2 tracks the planned polyline at constant joint-space speed (linear time-parameterization). Jerk-limited parameterization is next.
+- **Deterministic.** Restart sampling, RRT sampling, and random shortcutting all use the in-repo RNG with a fixed seed. The timed trajectory is bit-stable given the same seed and limits (CI golden test).
+- **S-curve time-parameterization.** A rest-to-rest 7-phase bang-bang-jerk profile times the scalar path length `s ∈ [0, L]`. Per-joint `(v, a, j)` limits are converted to path-space limits by the steepest `|dqᵢ/ds|` on the polyline, so no joint exceeds its bound along an edge. Tangent discontinuities at corners produce a one-sample acceleration spike; shortcutting keeps those corners to one or two.
+- **Physics-side servo.** The demos apply the exact MuJoCo bias force as gravity/Coriolis feedforward. Demo 2 commands the Menagerie position actuators as a PD tracker with velocity feedforward: `ctrl = q_des + (kv/kp)·qd_des` yields `τ = kp(q_des − q) + kv(qd_des − qd)`. Worst joint-space tracking on the cluttered query is 0.0046 rad.
 
 ## Roadmap
 
 - [x] Demo 1: FK + DLS IK, Rerun telemetry, offscreen-rendered GIF
 - [x] RRT-Connect with MuJoCo collision checks and shortcutting (Demo 2)
-- [ ] Jerk-limited trajectories; joint-space PD tracking
+- [x] Jerk-limited S-curve trajectories; joint-space PD + velocity feedforward
 - [ ] Pick-and-place with obstacle dodging; benchmark tables
 
 ## License & assets

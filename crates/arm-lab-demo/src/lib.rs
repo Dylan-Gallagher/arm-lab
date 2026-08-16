@@ -39,6 +39,24 @@ pub fn set_ctrl(data: &mut MjData<&MjModel>, names: &[&str], q: &[f64]) {
     }
 }
 
+/// Position command with velocity feedforward through the Menagerie PD.
+///
+/// The UR5e `general` actuators implement
+/// `τ = kp·ctrl − kp·q − kv·qd`. Commanding `ctrl = q_des + (kv/kp)·qd_des`
+/// yields `τ = kp(q_des − q) + kv(qd_des − qd)` — a PD tracker with velocity
+/// feedforward. `kv/kp` is 0.2 for both the size3 and size1 actuator classes.
+pub fn set_ctrl_pd(
+    data: &mut MjData<&MjModel>,
+    names: &[&str],
+    q_des: &[f64],
+    qd_des: &[f64],
+    kv_over_kp: f64,
+) {
+    for (act, (&qi, &vi)) in names.iter().zip(q_des.iter().zip(qd_des.iter())) {
+        data.actuator(act).unwrap().view_mut(data).ctrl[0] = qi + kv_over_kp * vi;
+    }
+}
+
 pub fn init_recording(
     app: &'static str,
     mode: &str,
