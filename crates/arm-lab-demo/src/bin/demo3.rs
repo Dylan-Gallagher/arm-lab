@@ -2,7 +2,7 @@
 //!
 //! IK solves grasp poses, RRT-Connect carries the cube around a pillar that
 //! blocks the joint-space interpolant, a pair-scoped attached-box proxy checks
-//! the carried cube against the environment, a jerk-bounded scalar S-curve
+//! the carried cube against the environment, jerk-bounded corner-stop S-curves
 //! times every segment, and a mocap weld stands in for a gripper (scripted
 //! attach, not contact-rich grasping).
 //!

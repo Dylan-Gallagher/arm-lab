@@ -200,17 +200,44 @@ fn demo2_seed_golden_trajectory() {
     }
 
     let mut max_v = 0.0f64;
-    for qd in &traj.qd {
+    let mut max_a = 0.0f64;
+    let mut max_j = 0.0f64;
+    for ((qd, qdd), qddd) in traj.qd.iter().zip(&traj.qdd).zip(&traj.qddd) {
         for &v in qd {
             max_v = max_v.max(v.abs());
         }
+        for &a in qdd {
+            max_a = max_a.max(a.abs());
+        }
+        for &j in qddd {
+            max_j = max_j.max(j.abs());
+        }
     }
     assert!(max_v <= limits.v_max + 1e-5, "joint v {max_v}");
+    assert!(max_a <= limits.a_max + 1e-5, "joint a {max_a}");
+    assert!(max_j <= limits.j_max + 1e-5, "joint j {max_j}");
+    let interior_stops = plan.waypoints[1..plan.waypoints.len() - 1]
+        .iter()
+        .map(|waypoint| {
+            traj.q
+                .iter()
+                .position(|q| q == waypoint)
+                .expect("every shortcut corner must be sampled")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(interior_stops.len(), plan.waypoints.len() - 2);
+    for index in &interior_stops {
+        assert!(traj.qd[*index].iter().all(|value| *value == 0.0));
+        assert!(traj.qdd[*index].iter().all(|value| *value == 0.0));
+    }
     println!(
-        "golden Demo 2 corner-stop traj: {} samples, {:.3} s, peak |qd| {:.3} rad/s, {} shortcut waypoints",
+        "golden Demo 2 corner-stop traj: {} samples, {:.3} s, peak |qd| {:.3} rad/s, peak |qdd| {:.3} rad/s^2, peak |qddd| {:.3} rad/s^3, {} shortcut waypoints, {} verified interior stops",
         traj.len(),
         traj.duration,
         max_v,
-        plan.waypoints.len()
+        max_a,
+        max_j,
+        plan.waypoints.len(),
+        interior_stops.len()
     );
 }

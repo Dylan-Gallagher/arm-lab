@@ -40,14 +40,14 @@ Tracking is replayed only when the canonical default plan succeeds. Both control
 
 | Scene | Controller | Replays | Numeric | Full | Penetration cases | Steps S/P/H | Max penetration (m) |
 |---|---|---:|---:|---:|---:|---:|---:|
-| open_floor | position PD | 47 | 0/47 | 0/47 | 7/47 | 180/845/104 | 0.00019435 |
-| open_floor | PD + velocity FF | 47 | 38/47 | 33/47 | 6/47 | 180/738/250 | 0.00210038 |
-| offset_pillar | position PD | 46 | 0/46 | 0/46 | 7/46 | 345/584/250 | 0.00096913 |
-| offset_pillar | PD + velocity FF | 46 | 35/46 | 30/46 | 7/46 | 345/565/250 | 0.00132360 |
-| tabletop_pillar | position PD | 45 | 0/45 | 0/45 | 5/45 | 0/636/250 | 0.00322250 |
-| tabletop_pillar | PD + velocity FF | 45 | 31/45 | 27/45 | 5/45 | 0/770/250 | 0.00322223 |
+| open_floor | position PD | 47 | 0/47 | 0/47 | 7/47 | 180/729/103 | 0.00026311 |
+| open_floor | PD + velocity FF | 47 | 38/47 | 33/47 | 6/47 | 180/889/250 | 0.00090529 |
+| offset_pillar | position PD | 46 | 0/46 | 0/46 | 7/46 | 345/685/250 | 0.00090942 |
+| offset_pillar | PD + velocity FF | 46 | 35/46 | 30/46 | 7/46 | 345/765/250 | 0.00148761 |
+| tabletop_pillar | position PD | 45 | 0/45 | 0/45 | 5/45 | 0/604/250 | 0.00321406 |
+| tabletop_pillar | PD + velocity FF | 45 | 31/45 | 27/45 | 5/45 | 0/750/250 | 0.00321387 |
 
-Paired full-gate discordance: **90 FF-pass/PD-fail** trajectories and **0 PD-pass/FF-fail** trajectories. Canonical planning failures with no replay: **162**. Sampled execution penetration occurs in **37/276** tracking cases; maximum depth is **0.00322250 m**.
+Paired full-gate discordance: **90 FF-pass/PD-fail** trajectories and **0 PD-pass/FF-fail** trajectories. Canonical planning failures with no replay: **162**. Sampled execution penetration occurs in **37/276** tracking cases; maximum depth is **0.00321406 m**.
 
 ## Scope and limitations
 
@@ -55,6 +55,7 @@ Paired full-gate discordance: **90 FF-pass/PD-fail** trajectories and **0 PD-pas
 - Wilson intervals describe repeated draws from this declared conditional generator only. The generator, scenes, and robot model remain fixed.
 - Direct and RRT collision checks sample joint-space edges at 0.05-rad L2 spacing and use the existing MuJoCo emitted-contact predicate. They do not certify continuous collision avoidance or positive clearance.
 - Tracking uses one canonical successful path per accepted query, the nominal plant only, and sampled `dist < 0` execution checks at 2-ms states. Planning failures receive no tracking replay and remain visible in the denominator.
+- Trajectories use a rest-to-rest S-curve on every shortcut edge. Full-stop corners make joint position, velocity, and acceleration continuous and keep jerk bounded almost everywhere, but they are not geometric blends or time-optimal trajectories.
 - The goal-bias comparison changes one planner field; it is an ablation, not a comparison with an independent planning implementation.
 - There is no randomized plant uncertainty, sensing, localization, grasping, payload, hardware, or sim-to-real evidence in this extension.
 

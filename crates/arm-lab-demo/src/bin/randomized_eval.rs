@@ -1028,6 +1028,7 @@ fn render_report(
          - Wilson intervals describe repeated draws from this declared conditional generator only. The generator, scenes, and robot model remain fixed.\n\
          - Direct and RRT collision checks sample joint-space edges at 0.05-rad L2 spacing and use the existing MuJoCo emitted-contact predicate. They do not certify continuous collision avoidance or positive clearance.\n\
          - Tracking uses one canonical successful path per accepted query, the nominal plant only, and sampled `dist < 0` execution checks at 2-ms states. Planning failures receive no tracking replay and remain visible in the denominator.\n\
+         - Trajectories use a rest-to-rest S-curve on every shortcut edge. Full-stop corners make joint position, velocity, and acceleration continuous and keep jerk bounded almost everywhere, but they are not geometric blends or time-optimal trajectories.\n\
          - The goal-bias comparison changes one planner field; it is an ablation, not a comparison with an independent planning implementation.\n\
          - There is no randomized plant uncertainty, sensing, localization, grasping, payload, hardware, or sim-to-real evidence in this extension.\n\n\
          ## Reproduce\n\n\

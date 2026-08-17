@@ -2,7 +2,7 @@
 //!
 //! Joint-space RRT-Connect plans a collision-free path for the UR5e around a
 //! pillar that blocks the straight-line interpolant from home to a panned
-//! goal. The path is shortcut, densified, timed with a jerk-bounded scalar S-curve,
+//! goal. The shortcut edges are timed with rest-to-rest, jerk-bounded S-curves
 //! and tracked with a gravity-compensated PD servo (velocity feedforward
 //! through the Menagerie position actuators).
 //!

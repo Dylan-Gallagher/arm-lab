@@ -4,8 +4,8 @@
 //! acceleration) parameterizes every nonzero edge of a joint-space polyline.
 //! Every interior waypoint is a full stop, so position, velocity, and
 //! acceleration are continuous even when the polyline tangent changes. Jerk
-//! may jump between finite left and right values at a waypoint, but its
-//! magnitude remains bounded.
+//! is bounded almost everywhere; it can have finite one-sided jumps at phase
+//! and waypoint boundaries, where the classical derivative need not exist.
 //!
 //! Limits are specified per joint. Each edge's path-space `(v, a, j)` limits
 //! are the tightest joint limit divided by `|dqᵢ/ds|` on that edge. Edge

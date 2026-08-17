@@ -1,8 +1,8 @@
 //! Deterministic simulation-side robustness envelope for the UR5e tracker.
 //!
-//! The same collision-free path and jerk-bounded scalar time law are replayed against
-//! payload, actuator, damping, command-latency, and disturbance shifts.  The
-//! model-based controllers only receive bias forces from the unperturbed
+//! The same collision-free path and per-edge corner-stop S-curves are replayed
+//! against payload, actuator, damping, command-latency, and disturbance shifts.
+//! The model-based controllers only receive bias forces from the unperturbed
 //! nominal model, so perturbed runs do not leak the changed plant parameters
 //! into the controller.
 //!
@@ -569,7 +569,7 @@ fn write_artifacts(rows: &[Metrics], trajectory: &Trajectory) {
 
     let mut markdown = format!(
         "# UR5e controller robustness envelope (simulation)\n\n\
-         Deterministic MuJoCo stress test over a {:.2} s, {}-sample collision-free RRT-Connect path timed by the in-repo scalar S-curve. Polyline corners are not blended, so the complete joint trajectory is not globally acceleration- or jerk-bounded. **This is simulation evidence, not hardware validation or a sim-to-real guarantee.**\n\n\
+         Deterministic MuJoCo stress test over a {:.2} s, {}-sample collision-free RRT-Connect path timed by the in-repo per-edge S-curves. Every shortcut corner is a full stop: joint position, velocity, and acceleration are continuous, and jerk is bounded almost everywhere, although jerk may jump between finite values and the path is not geometrically blended or time-optimal. **This is simulation evidence, not hardware validation or a sim-to-real guarantee.**\n\n\
          Pass threshold (declared in code): RMS joint error <= {:.2} rad, maximum joint error <= {:.2} rad, and final joint error <= {:.2} rad. Controller bias forces always come from the unchanged nominal model; perturbed plant parameters are not exposed to the controller.\n\n\
          | Scenario | Controller | RMS joint (rad) | Max joint (rad) | Final (rad) | Max EE pos (m) | Peak force/limit | Saturated steps | Result |\n\
          |---|---|---:|---:|---:|---:|---:|---:|:---:|\n",
