@@ -1,9 +1,10 @@
 //! Demo 3 — pick-and-place around a pillar, from scratch.
 //!
 //! IK solves grasp poses, RRT-Connect carries the cube around a pillar that
-//! blocks the joint-space interpolant, a jerk-bounded scalar S-curve times every
-//! segment, and a mocap weld stands in for a gripper (scripted attach, not
-//! contact-rich grasping).
+//! blocks the joint-space interpolant, a pair-scoped attached-box proxy checks
+//! the carried cube against the environment, a jerk-bounded scalar S-curve
+//! times every segment, and a mocap weld stands in for a gripper (scripted
+//! attach, not contact-rich grasping).
 //!
 //! ```text
 //! cargo run --release -p arm-lab-demo --bin demo3
@@ -16,7 +17,9 @@ use arm_lab::ik::{IkConfig, solve_ik};
 use arm_lab::kinematics::fk;
 use arm_lab::plan::rrt_connect;
 use arm_lab::traj::{TrajLimits, time_parameterize};
-use arm_lab::{Chain, CollisionChecker, PlanConfig, PlanStatus};
+use arm_lab::{
+    AttachedBoxCollisionChecker, AttachedBoxSpec, Chain, CollisionChecker, PlanConfig, PlanStatus,
+};
 use arm_lab_demo::{
     GIF_FPS, RENDER_EVERY, RENDER_H, RENDER_W, capture_frame, encode_gif, gravity_compensate,
     init_recording, log_transform, parse_args, read_q, set_ctrl, traj_step,
@@ -53,10 +56,10 @@ const KV_OVER_KP: f64 = 0.2;
 const LOG_EVERY: usize = 2;
 const SETTLE_STEPS: usize = 80;
 /// Carry planning rejects sampled robot penetration.
-///
-/// The carried cube is not represented in the planner collision geometry, so
-/// this does not certify clearance for the attached load.
 const CARRY_CONTACT_THRESHOLD: f64 = 0.0;
+/// Pair-scoped positive planning buffer for the attached cube only.
+const PAYLOAD_CLEARANCE_M: f64 = 0.005;
+const PAYLOAD_ENVIRONMENT: [&str; 3] = ["floor", "table", "pillar"];
 const SEED: u64 = 20260816;
 
 fn main() {
@@ -86,6 +89,18 @@ fn main() {
     };
     let mut cc = CollisionChecker::new(&model, &chain);
     assert!(!cc.collides(&q_home), "home is in collision");
+    let mut carry_cc = AttachedBoxCollisionChecker::new(
+        &model,
+        &chain,
+        AttachedBoxSpec::new(
+            "cube",
+            Isometry3::translation(CUBE_IN_EE.x, CUBE_IN_EE.y, CUBE_IN_EE.z),
+            PAYLOAD_ENVIRONMENT,
+            PAYLOAD_CLEARANCE_M,
+        ),
+    )
+    .expect("valid attached cube collision proxy");
+    carry_cc.set_robot_contact_threshold(CARRY_CONTACT_THRESHOLD);
 
     let q_pick_app = solve_named(
         "pick_approach",
@@ -216,14 +231,13 @@ fn main() {
         &q_pick_app,
         1e-3,
     );
-    q = go(
+    q = go_with_collision(
         "carry around pillar",
         &mut ctx,
-        &mut cc,
         &plan_cfg,
         &q,
         &q_place_app,
-        CARRY_CONTACT_THRESHOLD,
+        &mut |candidate| carry_cc.collides(candidate),
     );
     q = go(
         "descend to place",
@@ -300,8 +314,19 @@ fn go(
 ) -> Vec<f64> {
     cc.contact_threshold = contact_threshold;
     let mut collides = |q: &[f64]| cc.collides(q);
+    go_with_collision(name, ctx, plan_cfg, q_from, q_to, &mut collides)
+}
+
+fn go_with_collision(
+    name: &str,
+    ctx: &mut ExecCtx<'_, '_>,
+    plan_cfg: &PlanConfig,
+    q_from: &[f64],
+    q_to: &[f64],
+    collides: &mut impl FnMut(&[f64]) -> bool,
+) -> Vec<f64> {
     let t0 = std::time::Instant::now();
-    let plan = rrt_connect(ctx.chain, q_from, q_to, &mut collides, plan_cfg);
+    let plan = rrt_connect(ctx.chain, q_from, q_to, collides, plan_cfg);
     let plan_ms = t0.elapsed().as_secs_f64() * 1e3;
     assert_eq!(
         plan.status,
