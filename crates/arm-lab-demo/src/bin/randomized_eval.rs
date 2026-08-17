@@ -268,7 +268,7 @@ fn main() {
                     {
                         canonical_trajectory = Some((
                             seed,
-                            time_parameterize(&plan.path, &LIMITS, model.opt().timestep),
+                            time_parameterize(&plan.waypoints, &LIMITS, model.opt().timestep),
                         ));
                     }
                     planning.push(PlanningRow {

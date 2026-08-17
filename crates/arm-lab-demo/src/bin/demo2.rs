@@ -101,7 +101,7 @@ fn main() {
         a_max: 1.8,
         j_max: 8.0,
     };
-    let traj = time_parameterize(&plan.path, &limits, dt);
+    let traj = time_parameterize(&plan.waypoints, &limits, dt);
     println!(
         "[demo2] S-curve: {:.2} s · {} samples @ dt={dt} · limits v≤{} a≤{} j≤{}",
         traj.duration,

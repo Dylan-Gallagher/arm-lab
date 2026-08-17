@@ -334,7 +334,7 @@ fn go_with_collision(
         "{name}: planner failed ({:?})",
         plan.status
     );
-    let traj = time_parameterize(&plan.path, &ctx.limits, ctx.dt);
+    let traj = time_parameterize(&plan.waypoints, &ctx.limits, ctx.dt);
     println!(
         "[demo3] {name}: plan {plan_ms:.1} ms · {} waypoints · S-curve {:.2} s",
         plan.waypoints.len(),

@@ -359,7 +359,7 @@ fn main() {
                     seed
                 );
                 let trajectory =
-                    time_parameterize(&plan.path, &LIMITS, nominal_model.opt().timestep);
+                    time_parameterize(&plan.waypoints, &LIMITS, nominal_model.opt().timestep);
                 if seed == CANONICAL_SEED {
                     canonical_trajectory = Some(trajectory.clone());
                 }

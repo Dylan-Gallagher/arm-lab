@@ -255,7 +255,7 @@ fn benchmark_trajectory(model: &MjModel, chain: &Chain) -> Trajectory {
     );
     assert_eq!(plan.status, PlanStatus::Success, "benchmark plan failed");
     time_parameterize(
-        &plan.path,
+        &plan.waypoints,
         &TrajLimits {
             v_max: 0.55,
             a_max: 1.8,
