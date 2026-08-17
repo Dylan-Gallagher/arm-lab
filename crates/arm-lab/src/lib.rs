@@ -29,7 +29,10 @@ pub mod rng;
 pub mod traj;
 
 pub use chain::{Chain, Joint, Link};
-pub use collision::{CollisionChecker, RobotContact};
+pub use collision::{
+    AttachedBoxCollisionChecker, AttachedBoxError, AttachedBoxSpec, CollisionChecker,
+    PayloadPairDistance, RobotContact,
+};
 pub use ik::{IkConfig, IkResult};
 pub use plan::{PlanConfig, PlanResult, PlanStatus};
 pub use rng::Rng;
