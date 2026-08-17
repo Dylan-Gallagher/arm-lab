@@ -35,6 +35,12 @@ The 1 s median planning-time exit criterion is met by two orders of magnitude. T
 
 The generated [full results](docs/robustness_results.md) and [raw CSV](docs/robustness_results.csv) state their pass thresholds and limitations. This is a simulation stress test, not hardware validation or a sim-to-real guarantee.
 
+## Multi-scene, multi-query extension (simulation)
+
+`multi_query_bench` adds nine fixed scene-query fixtures (three per shipped MJCF scene, six unique joint-pair definitions) while retaining the original declared numeric tracking thresholds. Selected joint pairs are deliberately repeated across scenes to isolate geometry effects. Across five fixed planner seeds per fixture, all **30/30 direct-free** and **15/15 obstructed** trials succeeded. Executed states are checked after every settling, path, and hold step with a threshold of exactly 0.0 m; a case passes only with zero sampled robot contacts whose signed distance is negative. This is a sampled penetration gate, not a positive-clearance certificate.
+
+Position PD meets the numeric gates in **0/18** tracking cases. Desired-velocity feedforward meets the numeric gates in **14/18** cases and passes the full zero-penetration gate in **13/18**. The four sampled-penetration cases are all the retained `reverse_cross_workspace` negative: 25--72 path steps depending on plant/controller, with 0.050--0.079 mm maximum actual penetration; settling and hold remain penetration-free. The generated [report](docs/multi_query_results.md), [45-row planning CSV](docs/multi_query_planning.csv), and [36-row tracking CSV](docs/multi_query_tracking.csv) retain every outcome and include exact joint vectors, seeds, trajectory metrics, per-phase penetration counts/depths and contact identities, pass criteria, and claim boundaries. The fixtures are hand-designed and deterministic, not a sampled task distribution; the results do not estimate hardware or workspace-wide success probability.
+
 ## Layout
 
 ```
@@ -72,6 +78,12 @@ cargo run --release -p arm-lab-demo --bin demo3 -- --connect
 
 # deterministic controller-ablation × plant-shift matrix; write Markdown + CSV
 cargo run --release -p arm-lab-demo --bin robustness_bench -- --write
+
+# three scenes × three fixed queries; write planning/tracking CSVs + report
+cargo run --release -p arm-lab-demo --bin multi_query_bench -- --write
+
+# rerun the bounded matrix and verify deterministic committed fields/outcomes
+cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
 ```
 
 Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time. Set `MUJOCO_DOWNLOAD_DIR` to an absolute directory before building and add its downloaded `lib/` directory to `LD_LIBRARY_PATH` before running; see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs).
@@ -85,7 +97,7 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - **Deterministic.** Restart sampling, RRT sampling, and random shortcutting all use the in-repo RNG with a fixed seed. The timed trajectory is bit-stable given the same seed and limits (CI golden test).
 - **Scalar S-curve time law.** A rest-to-rest 7-phase bang-bang-jerk profile times the scalar path length `s ∈ [0, L]`. Per-joint `(v, a, j)` limits are converted to path-space limits by the steepest `|dqᵢ/ds|` on the polyline, so no joint exceeds its bound within an edge. Polyline tangent discontinuities are not blended: joint velocity can jump at a corner, so the complete joint trajectory is not globally acceleration- or jerk-bounded.
 - **Physics-side servo.** The demos apply the exact MuJoCo bias force as gravity/Coriolis feedforward. Position actuators are commanded as a PD tracker with velocity feedforward: `ctrl = q_des + (kv/kp)·qd_des` yields `τ = kp(q_des − q) + kv(qd_des − qd)`. Worst joint-space tracking is 0.0046 rad (Demo 2) and 0.0037 rad (Demo 3).
-- **Scripted grasp.** Demo 3 welds a mocap cube to the EE after the pick descend and parks it on the place pad after the place descend. That is a kinematics/planning demo, not contact-rich grasping. The carry query inflates collision clearance by 4 cm so the cube volume clears the pillar.
+- **Scripted grasp.** Demo 3 welds a mocap cube to the EE after the pick descend and parks it on the place pad after the place descend. That is a kinematics/planning demo, not contact-rich grasping. The cube volume is not represented in the planner collision geometry, and carry planning uses a zero contact threshold that only rejects sampled robot penetration. Attached-load and pair-scoped clearance checks remain future work.
 
 ## Roadmap
 
@@ -94,6 +106,7 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - [x] Jerk-bounded scalar S-curve time law; joint-space PD + velocity feedforward
 - [x] Pick-and-place with obstacle dodging; benchmark tables
 - [x] Reproducible controller robustness matrix with raw CSV and explicit sim-only limits
+- [x] Multi-scene, multi-query planning and tracking extension with raw CSVs
 
 ## License & assets
 

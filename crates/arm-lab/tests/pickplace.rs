@@ -18,7 +18,8 @@ const PLACE_APPROACH: [f64; 3] = [0.22, 0.58, 0.52];
 const PICK: [f64; 3] = [-0.24, 0.58, 0.42];
 const PLACE: [f64; 3] = [0.22, 0.58, 0.42];
 const SEED: u64 = 20260816;
-const CARRY_CLEARANCE: f64 = 0.04;
+// The cube is absent from planner geometry; this only rejects robot penetration.
+const CARRY_CONTACT_THRESHOLD: f64 = 0.0;
 
 fn load() -> (MjModel, Chain, Vec<f64>) {
     let model = MjModel::from_xml(SCENE).unwrap();
@@ -71,10 +72,18 @@ fn home_is_free_and_poses_are_reachable() {
 }
 
 #[test]
+fn cube_is_visual_only() {
+    let (model, _, _) = load();
+    let cube_geom = model.name_to_id(MjtObj::mjOBJ_GEOM, "cube").unwrap();
+    assert_eq!(model.geom_contype()[cube_geom], 0);
+    assert_eq!(model.geom_conaffinity()[cube_geom], 0);
+}
+
+#[test]
 fn carry_straight_line_hits_pillar_rrt_succeeds() {
     let (model, chain, q_home) = load();
     let mut cc = CollisionChecker::new(&model, &chain);
-    cc.clearance = CARRY_CLEARANCE;
+    cc.contact_threshold = CARRY_CONTACT_THRESHOLD;
     let rot = fk(&chain, &q_home).rotation;
     let q_pick = ik_at(&chain, PICK_APPROACH, &q_home, rot);
     let q_place = ik_at(&chain, PLACE_APPROACH, &q_home, rot);

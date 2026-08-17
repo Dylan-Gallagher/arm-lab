@@ -45,13 +45,9 @@
     </body>
 
     <!--
-      Mocap cube: the demo welds it to the EE after pick and parks it on the
-      pad after place. Visual + a thin collision so the planner treats the
-      resting cube as an obstacle at the pick pose, but the weld in the demo
-      keeps it from generating EE-vs-cube contacts (contype is left on; the
-      checker only flags robot-involved contacts, and we disable the cube's
-      contype from the demo's live model if needed). Default: no collision,
-      so the descend-to-pick does not fight the cube geom.
+      Visual/mocap-only cube: the demo welds it to the EE after pick and parks
+      it on the pad after place. Its contact masks are zero, so it is excluded
+      from planner collision geometry.
     -->
     <body name="cube" mocap="true" pos="-0.24 0.58 0.385">
       <geom name="cube" type="box" size="0.025 0.025 0.025" material="cube"

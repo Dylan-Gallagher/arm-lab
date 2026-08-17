@@ -176,6 +176,39 @@ fn pillar_is_detected() {
 }
 
 #[test]
+fn collision_audit_matches_boolean_and_identifies_pillar() {
+    let model = cluttered_model();
+    let chain = cluttered_chain(&model);
+    let start = home_q();
+    let mut q = start;
+    let mut checker = CollisionChecker::new(&model, &chain);
+    checker.contact_threshold = 0.0;
+    let mut first_contacts = None;
+    for step in 0..=100 {
+        q[0] = start[0] + 1.1 * step as f64 / 100.0;
+        let contacts = checker.robot_contacts(&q);
+        if !contacts.is_empty() {
+            assert!(checker.collides(&q));
+            first_contacts = Some(contacts);
+            break;
+        }
+    }
+    let contacts = first_contacts.expect("pan sweep never contacted pillar");
+    assert!(contacts.iter().all(|contact| {
+        contact.distance_m < 0.0
+            && !contact.geom1_name.is_empty()
+            && !contact.geom2_name.is_empty()
+            && !contact.body1_name.is_empty()
+            && !contact.body2_name.is_empty()
+    }));
+    assert!(
+        contacts
+            .iter()
+            .any(|contact| { contact.geom1_name == "pillar" || contact.geom2_name == "pillar" })
+    );
+}
+
+#[test]
 fn rrt_dodges_ur5e_pillar() {
     let model = cluttered_model();
     let chain = cluttered_chain(&model);

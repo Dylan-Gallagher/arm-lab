@@ -52,8 +52,11 @@ const CUBE_REST_PLACE: [f64; 3] = [0.22, 0.58, 0.385];
 const KV_OVER_KP: f64 = 0.2;
 const LOG_EVERY: usize = 2;
 const SETTLE_STEPS: usize = 80;
-/// Inflate obstacles during the carry so the cube volume clears the pillar.
-const CARRY_CLEARANCE: f64 = 0.04;
+/// Carry planning rejects sampled robot penetration.
+///
+/// The carried cube is not represented in the planner collision geometry, so
+/// this does not certify clearance for the attached load.
+const CARRY_CONTACT_THRESHOLD: f64 = 0.0;
 const SEED: u64 = 20260816;
 
 fn main() {
@@ -220,7 +223,7 @@ fn main() {
         &plan_cfg,
         &q,
         &q_place_app,
-        CARRY_CLEARANCE,
+        CARRY_CONTACT_THRESHOLD,
     );
     q = go(
         "descend to place",
@@ -293,9 +296,9 @@ fn go(
     plan_cfg: &PlanConfig,
     q_from: &[f64],
     q_to: &[f64],
-    clearance: f64,
+    contact_threshold: f64,
 ) -> Vec<f64> {
-    cc.clearance = clearance;
+    cc.contact_threshold = contact_threshold;
     let mut collides = |q: &[f64]| cc.collides(q);
     let t0 = std::time::Instant::now();
     let plan = rrt_connect(ctx.chain, q_from, q_to, &mut collides, plan_cfg);
