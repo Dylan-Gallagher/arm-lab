@@ -4,9 +4,9 @@
 //!
 //! This crate is deliberately *not* a wrapper around a kinematics or planning
 //! library. The core algorithms — forward kinematics, geometric Jacobians,
-//! damped least-squares inverse kinematics, RRT-Connect, and jerk-limited
-//! time-parameterization — are implemented here directly. External crates are
-//! used only at the edges:
+//! damped least-squares inverse kinematics, RRT-Connect, and full-stop S-curve
+//! time-parameterization with almost-everywhere jerk bounds — are implemented
+//! here directly. External crates are used only at the edges:
 //!
 //! - [`mujoco_rs::MjModel`] supplies the robot description: the chain is
 //!   *extracted* from MuJoCo's compiled model (body offsets, joint axes,

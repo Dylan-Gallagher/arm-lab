@@ -2,7 +2,7 @@
 //!
 //! IK solves grasp poses, RRT-Connect carries the cube around a pillar that
 //! blocks the joint-space interpolant, a pair-scoped attached-box proxy checks
-//! the carried cube against the environment, a jerk-bounded scalar S-curve
+//! the carried cube against the environment, jerk-bounded corner-stop S-curves
 //! times every segment, and a mocap weld stands in for a gripper (scripted
 //! attach, not contact-rich grasping).
 //!
@@ -334,7 +334,7 @@ fn go_with_collision(
         "{name}: planner failed ({:?})",
         plan.status
     );
-    let traj = time_parameterize(&plan.path, &ctx.limits, ctx.dt);
+    let traj = time_parameterize(&plan.waypoints, &ctx.limits, ctx.dt);
     println!(
         "[demo3] {name}: plan {plan_ms:.1} ms · {} waypoints · S-curve {:.2} s",
         plan.waypoints.len(),

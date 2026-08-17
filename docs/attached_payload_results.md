@@ -47,9 +47,9 @@ rotation. MuJoCo's resulting `geom_xpos`/`geom_xmat` agree with
 checker positions the compiled geom—not merely the mocap body origin—as
 declared.
 
-Two repeated headless Demo 3 runs planned the attached-cube carry in 7.8 ms and
-5.4 ms, respectively. Both produced the same 6 shortcut waypoints, 3.09 s
-timed carry, and 0.0067 rad worst joint-tracking error. The timing is
+Two repeated headless Demo 3 runs planned the attached-cube carry in 5.6 ms and
+5.4 ms, respectively. Both produced the same 6 shortcut waypoints, 5.13 s
+corner-stop timed carry, and 0.0022 rad worst joint-tracking error. The timing is
 illustrative and can vary with the machine and load; the path fields and
 audited outcomes are the deterministic evidence.
 
@@ -58,9 +58,9 @@ audited outcomes are the deterministic evidence.
 - The naive straight carry is unsafe under both scoped checks: 9/23 sampled
   states have a robot collision and 11/23 violate the cube margin.
 - Adding the payload gate changes the old 4-waypoint carry into a 6-waypoint,
-  47-sample path and increases the representative full-demo worst tracking
-  error from the earlier 0.0037 rad report to 0.0067 rad. Neither change is
-  hidden.
+  47-sample path. The later corner-stop time law increases carry duration while
+  reducing the repeated full-demo worst tracking error to 0.0022 rad; neither
+  change is hidden.
 - A global 40 mm robot threshold is not used. The positive 5 mm rule applies
   only to the declared cube/environment pairs; the original zero-penetration
   robot rule remains unchanged during carry.
