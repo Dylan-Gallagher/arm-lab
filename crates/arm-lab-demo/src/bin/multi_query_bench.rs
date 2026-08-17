@@ -11,6 +11,7 @@
 //! ```text
 //! cargo run --release -p arm-lab-demo --bin multi_query_bench
 //! cargo run --release -p arm-lab-demo --bin multi_query_bench -- --write
+//! cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
 //! ```
 
 use std::collections::VecDeque;
@@ -49,6 +50,7 @@ const HOLD_STEPS: usize = 250;
 const PASS_RMS_RAD: f64 = 0.03;
 const PASS_MAX_RAD: f64 = 0.10;
 const PASS_FINAL_RAD: f64 = 0.02;
+const EXECUTION_CLEARANCE_M: f64 = 1e-3;
 const LIMITS: TrajLimits = TrajLimits {
     v_max: 0.55,
     a_max: 1.8,
@@ -229,7 +231,76 @@ struct TrackingRow {
     max_ee_pos_m: f64,
     peak_force_fraction: f64,
     saturated_step_fraction: f64,
+    settle_collisions: CollisionPhaseMetrics,
+    path_collisions: CollisionPhaseMetrics,
+    hold_collisions: CollisionPhaseMetrics,
     pass: bool,
+}
+
+impl TrackingRow {
+    fn collision_steps(&self) -> usize {
+        self.settle_collisions.steps + self.path_collisions.steps + self.hold_collisions.steps
+    }
+
+    fn max_penetration_m(&self) -> f64 {
+        self.settle_collisions
+            .max_penetration_m
+            .max(self.path_collisions.max_penetration_m)
+            .max(self.hold_collisions.max_penetration_m)
+    }
+
+    fn max_clearance_violation_m(&self) -> f64 {
+        self.settle_collisions
+            .max_clearance_violation_m
+            .max(self.path_collisions.max_clearance_violation_m)
+            .max(self.hold_collisions.max_clearance_violation_m)
+    }
+}
+
+#[derive(Clone, Default)]
+struct CollisionPhaseMetrics {
+    steps: usize,
+    max_penetration_m: f64,
+    max_clearance_violation_m: f64,
+    worst_contact_distance_m: Option<f64>,
+    worst_contact: Option<String>,
+}
+
+impl CollisionPhaseMetrics {
+    fn observe(&mut self, checker: &mut CollisionChecker<&MjModel>, q: &[f64]) {
+        let contacts = checker.robot_contacts(q);
+        if contacts.is_empty() {
+            return;
+        }
+        self.steps += 1;
+        for contact in contacts {
+            let penetration = (-contact.distance_m).max(0.0);
+            let violation = (checker.clearance - contact.distance_m).max(0.0);
+            self.max_penetration_m = self.max_penetration_m.max(penetration);
+            if violation > self.max_clearance_violation_m {
+                self.max_clearance_violation_m = violation;
+                self.worst_contact_distance_m = Some(contact.distance_m);
+                self.worst_contact = Some(contact.identity());
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Run,
+    Write,
+    Check,
+}
+
+fn parse_mode() -> Mode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [] => Mode::Run,
+        [arg] if arg == "--write" => Mode::Write,
+        [arg] if arg == "--check" => Mode::Check,
+        _ => panic!("usage: multi_query_bench [--write|--check]"),
+    }
 }
 
 struct DelayedCommand {
@@ -237,7 +308,7 @@ struct DelayedCommand {
 }
 
 fn main() {
-    let write_results = std::env::args().any(|arg| arg == "--write");
+    let mode = parse_mode();
     let mut planning_rows = Vec::with_capacity(QUERIES.len() * SEEDS.len());
     let mut tracking_rows = Vec::with_capacity(QUERIES.len() * PLANTS.len() * CONTROLLERS.len());
 
@@ -345,12 +416,14 @@ fn main() {
                         &trajectory,
                     );
                     println!(
-                        "  {:<23} | {:<16} | rms {:>7.4} | max {:>7.4} | final {:>7.4} | {}",
+                        "  {:<23} | {:<16} | rms {:>7.4} | max {:>7.4} | final {:>7.4} | collisions {:>4} | pen {:>7.3} mm | {}",
                         metrics.plant,
                         metrics.controller,
                         metrics.rms_joint_rad,
                         metrics.max_joint_rad,
                         metrics.final_joint_rad,
+                        metrics.collision_steps(),
+                        1e3 * metrics.max_penetration_m(),
                         if metrics.pass { "PASS" } else { "FAIL" }
                     );
                     tracking_rows.push(metrics);
@@ -363,23 +436,30 @@ fn main() {
         .iter()
         .filter(|row| row.seed == CANONICAL_SEED && !row.direct_free)
         .count();
-    let planner_successes = planning_rows
+    let direct_trials = planning_rows.iter().filter(|row| row.direct_free).count();
+    let direct_successes = planning_rows
         .iter()
-        .filter(|row| row.status == PlanStatus::Success)
+        .filter(|row| row.direct_free && row.status == PlanStatus::Success)
+        .count();
+    let obstructed_trials = planning_rows.iter().filter(|row| !row.direct_free).count();
+    let obstructed_successes = planning_rows
+        .iter()
+        .filter(|row| !row.direct_free && row.status == PlanStatus::Success)
         .count();
     let velocity_passes = tracking_rows
         .iter()
         .filter(|row| row.controller == Controller::VelocityFf.name() && row.pass)
         .count();
     println!(
-        "summary: {planner_successes}/{} planner successes; {blocked_queries}/{} blocked-direct queries; {velocity_passes}/{} velocity-FF passes",
-        planning_rows.len(),
+        "summary: direct-free {direct_successes}/{direct_trials}; obstructed {obstructed_successes}/{obstructed_trials}; {blocked_queries}/{} blocked-direct fixtures; {velocity_passes}/{} velocity-FF passes",
         QUERIES.len(),
         QUERIES.len() * PLANTS.len()
     );
 
-    if write_results {
-        write_artifacts(&planning_rows, &tracking_rows);
+    match mode {
+        Mode::Run => {}
+        Mode::Write => write_artifacts(&planning_rows, &tracking_rows),
+        Mode::Check => check_artifacts(&planning_rows, &tracking_rows),
     }
 }
 
@@ -494,6 +574,11 @@ fn run_tracking_case(
     let delay_steps = (scenario.delay_ms * 1e-3 / dt).round() as usize;
     let zero = vec![0.0; chain.dof()];
     let mut queue = VecDeque::with_capacity(delay_steps + 1);
+    let mut collision_checker = CollisionChecker::new(model, chain);
+    collision_checker.clearance = EXECUTION_CLEARANCE_M;
+    let mut settle_collisions = CollisionPhaseMetrics::default();
+    let mut path_collisions = CollisionPhaseMetrics::default();
+    let mut hold_collisions = CollisionPhaseMetrics::default();
     for _ in 0..delay_steps {
         queue.push_back(DelayedCommand {
             ctrl: q_start.clone(),
@@ -504,6 +589,7 @@ fn run_tracking_case(
         control_step(
             controller, scenario, &mut data, chain, q_start, &zero, &mut queue, false,
         );
+        settle_collisions.observe(&mut collision_checker, &read_q(&data, chain));
     }
 
     let mut sum_sq = 0.0;
@@ -523,6 +609,7 @@ fn run_tracking_case(
         );
 
         let q_measured = read_q(&data, chain);
+        path_collisions.observe(&mut collision_checker, &q_measured);
         let error = l2(&q_measured, q_des);
         sum_sq += error * error;
         samples += 1;
@@ -543,11 +630,15 @@ fn run_tracking_case(
         control_step(
             controller, scenario, &mut data, chain, q_goal, &zero, &mut queue, false,
         );
+        hold_collisions.observe(&mut collision_checker, &read_q(&data, chain));
     }
     let final_joint = l2(&read_q(&data, chain), q_goal);
     let rms_joint = (sum_sq / samples as f64).sqrt();
-    let pass =
-        rms_joint <= PASS_RMS_RAD && max_joint <= PASS_MAX_RAD && final_joint <= PASS_FINAL_RAD;
+    let collision_steps = settle_collisions.steps + path_collisions.steps + hold_collisions.steps;
+    let pass = rms_joint <= PASS_RMS_RAD
+        && max_joint <= PASS_MAX_RAD
+        && final_joint <= PASS_FINAL_RAD
+        && collision_steps == 0;
 
     TrackingRow {
         scene: scene.name,
@@ -564,6 +655,9 @@ fn run_tracking_case(
         max_ee_pos_m: max_ee,
         peak_force_fraction,
         saturated_step_fraction: saturated_steps as f64 / samples as f64,
+        settle_collisions,
+        path_collisions,
+        hold_collisions,
         pass,
     }
 }
@@ -619,6 +713,30 @@ fn l2(a: &[f64], b: &[f64]) -> f64 {
         .sqrt()
 }
 
+fn numeric_gates_pass(row: &TrackingRow) -> bool {
+    row.rms_joint_rad <= PASS_RMS_RAD
+        && row.max_joint_rad <= PASS_MAX_RAD
+        && row.final_joint_rad <= PASS_FINAL_RAD
+}
+
+fn worst_collision(row: &TrackingRow) -> (&'static str, &CollisionPhaseMetrics) {
+    [
+        ("settle", &row.settle_collisions),
+        ("path", &row.path_collisions),
+        ("hold", &row.hold_collisions),
+    ]
+    .into_iter()
+    .max_by(|(_, left), (_, right)| {
+        left.max_clearance_violation_m
+            .total_cmp(&right.max_clearance_violation_m)
+    })
+    .expect("three collision phases")
+}
+
+fn format_optional_distance(value: Option<f64>) -> String {
+    value.map_or_else(String::new, |distance| format!("{distance:.8}"))
+}
+
 fn status_name(status: PlanStatus) -> &'static str {
     match status {
         PlanStatus::Success => "success",
@@ -635,10 +753,13 @@ fn format_joint_vector(q: &[f64]) -> String {
         .join(";")
 }
 
-fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
-    let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
-    std::fs::create_dir_all(&docs).expect("create docs directory");
+struct Artifacts {
+    planning_csv: String,
+    tracking_csv: String,
+    report: String,
+}
 
+fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artifacts {
     let mut planning_csv = String::from(
         "scene,scene_file,query,seed,start_q_rad,goal_q_rad,direct_path_free,status,plan_elapsed_ms,iterations,nodes,shortcut_waypoints,path_samples,path_cost_rad,trajectory_samples,trajectory_duration_s\n",
     );
@@ -665,16 +786,13 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
         )
         .expect("format planning CSV");
     }
-    std::fs::write(docs.join("multi_query_planning.csv"), planning_csv)
-        .expect("write planning CSV");
-
     let mut tracking_csv = String::from(
-        "scene,scene_file,query,seed,direct_path_free,plant,controller,trajectory_samples,trajectory_duration_s,rms_joint_rad,max_joint_rad,final_joint_rad,max_ee_pos_m,peak_force_fraction,saturated_step_fraction,pass\n",
+        "scene,scene_file,query,seed,direct_path_free,plant,controller,trajectory_samples,trajectory_duration_s,rms_joint_rad,max_joint_rad,final_joint_rad,max_ee_pos_m,peak_force_fraction,saturated_step_fraction,settle_collision_steps,settle_max_penetration_m,settle_max_clearance_violation_m,settle_worst_contact_distance_m,settle_worst_contact,path_collision_steps,path_max_penetration_m,path_max_clearance_violation_m,path_worst_contact_distance_m,path_worst_contact,hold_collision_steps,hold_max_penetration_m,hold_max_clearance_violation_m,hold_worst_contact_distance_m,hold_worst_contact,collision_steps,max_penetration_m,max_clearance_violation_m,pass\n",
     );
     for row in tracking {
         writeln!(
             tracking_csv,
-            "{},{},{},{},{},{},{},{},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{}",
+            "{},{},{},{},{},{},{},{},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{},{:.8},{:.8},{},{},{},{:.8},{:.8},{},{},{},{:.8},{:.8},{},{},{},{:.8},{:.8},{}",
             row.scene,
             row.scene_file,
             row.query,
@@ -690,36 +808,64 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
             row.max_ee_pos_m,
             row.peak_force_fraction,
             row.saturated_step_fraction,
+            row.settle_collisions.steps,
+            row.settle_collisions.max_penetration_m,
+            row.settle_collisions.max_clearance_violation_m,
+            format_optional_distance(row.settle_collisions.worst_contact_distance_m),
+            row.settle_collisions.worst_contact.as_deref().unwrap_or(""),
+            row.path_collisions.steps,
+            row.path_collisions.max_penetration_m,
+            row.path_collisions.max_clearance_violation_m,
+            format_optional_distance(row.path_collisions.worst_contact_distance_m),
+            row.path_collisions.worst_contact.as_deref().unwrap_or(""),
+            row.hold_collisions.steps,
+            row.hold_collisions.max_penetration_m,
+            row.hold_collisions.max_clearance_violation_m,
+            format_optional_distance(row.hold_collisions.worst_contact_distance_m),
+            row.hold_collisions.worst_contact.as_deref().unwrap_or(""),
+            row.collision_steps(),
+            row.max_penetration_m(),
+            row.max_clearance_violation_m(),
             row.pass
         )
         .expect("format tracking CSV");
     }
-    std::fs::write(docs.join("multi_query_tracking.csv"), tracking_csv)
-        .expect("write tracking CSV");
 
+    let direct_trials = planning.iter().filter(|row| row.direct_free).count();
+    let direct_successes = planning
+        .iter()
+        .filter(|row| row.direct_free && row.status == PlanStatus::Success)
+        .count();
+    let obstructed_trials = planning.iter().filter(|row| !row.direct_free).count();
+    let obstructed_successes = planning
+        .iter()
+        .filter(|row| !row.direct_free && row.status == PlanStatus::Success)
+        .count();
     let mut report = format!(
         "# UR5e multi-scene, multi-query benchmark (simulation)\n\n\
          This deterministic extension evaluates **nine fixed scene-query fixtures (three per scene, six unique joint-pair definitions) across {} shipped MJCF scenes**. Repeating selected joint pairs across scenes creates controlled geometry comparisons. Five fixed planner seeds per fixture produce {} planning trials. The canonical-seed trajectory for each fixture is then replayed using two controller variants against the nominal plant and one fixed combined shift, producing {} tracking trials. Three fixtures have collision-blocked straight interpolants. **This is simulation evidence, not hardware validation or a sim-to-real guarantee.**\n\n\
-         The tracking pass limits are reused unchanged from the earlier robustness envelope: temporal RMS six-joint L2 error <= {:.2} rad, maximum error <= {:.2} rad, and final error after a {}-step hold <= {:.2} rad. They were declared in code before this benchmark was executed.\n\n\
+         Planner headline: **{direct_successes}/{direct_trials} direct-free trials** and **{obstructed_successes}/{obstructed_trials} obstructed trials** succeeded.\n\n\
+         The numeric tracking limits are reused unchanged from the earlier robustness envelope: temporal RMS six-joint L2 error <= {:.2} rad, maximum error <= {:.2} rad, and final error after a {}-step hold <= {:.2} rad. In addition, a tracking case now passes only with **zero robot-collision steps** across settling, path execution, and hold under the repository's {:.3}-m clearance semantics. Signed contact distance, actual penetration, clearance violation, and worst geom pair are retained in the raw CSV.\n\n\
+         `plan_elapsed_ms` is observational wall-clock data: it is machine- and load-dependent and is **not byte-stable**. The bounded `--check` mode ignores only that column while verifying every committed deterministic planning field, all tracking fields/outcomes, and this report.\n\n\
          ## Planning and trajectory summary\n\n\
-         | Scene | Query | Direct interpolant | Planner success | Median plan (ms) | Cost range (rad) | Canonical trajectory |\n\
-         |---|---|:---:|:---:|---:|---:|---:|\n",
+         | Scene | Query | Direct interpolant | Planner success | Cost range (rad) | Canonical trajectory |\n\
+         |---|---|:---:|:---:|---:|---:|\n",
         SCENES.len(),
         planning.len(),
         tracking.len(),
         PASS_RMS_RAD,
         PASS_MAX_RAD,
         HOLD_STEPS,
-        PASS_FINAL_RAD
+        PASS_FINAL_RAD,
+        EXECUTION_CLEARANCE_M
     );
 
     for query in QUERIES {
         let scene = SCENES[query.scene];
-        let mut rows: Vec<&PlanningRow> = planning
+        let rows: Vec<&PlanningRow> = planning
             .iter()
             .filter(|row| row.scene == scene.name && row.query == query.name)
             .collect();
-        rows.sort_by(|a, b| a.elapsed_ms.total_cmp(&b.elapsed_ms));
         let successes = rows
             .iter()
             .filter(|row| row.status == PlanStatus::Success)
@@ -738,7 +884,7 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
             .expect("canonical planning row");
         writeln!(
             report,
-            "| {} | {} | {} | {}/{} | {:.3} | {:.3}--{:.3} | {} samples / {:.2} s |",
+            "| {} | {} | {} | {}/{} | {:.3}--{:.3} | {} samples / {:.2} s |",
             scene.name,
             query.name,
             if canonical.direct_free {
@@ -748,7 +894,6 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
             },
             successes,
             rows.len(),
-            rows[rows.len() / 2].elapsed_ms,
             min_cost,
             max_cost,
             canonical.trajectory_samples,
@@ -759,7 +904,7 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
 
     report.push_str(
         "\n## Tracking results\n\n\
-         Each cell is RMS / maximum / final six-joint L2 error in radians. `PASS` requires all three declared limits.\n\n\
+         Each cell is RMS / maximum / final six-joint L2 error in radians, followed by collision steps in settle/path/hold and maximum actual penetration. `PASS` requires all three numeric limits and zero collision steps.\n\n\
          | Scene | Query | Plant | Position PD | PD + velocity FF |\n\
          |---|---|---|---:|---:|\n",
     );
@@ -786,27 +931,31 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
                 .expect("velocity row");
             writeln!(
                 report,
-                "| {} | {} | {} | {:.4} / {:.4} / {:.4} {} | {:.4} / {:.4} / {:.4} {} |",
+                "| {} | {} | {} | {:.4}/{:.4}/{:.4}; c {}/{}/{}; pen {:.3} mm {} | {:.4}/{:.4}/{:.4}; c {}/{}/{}; pen {:.3} mm {} |",
                 scene.name,
                 query.name,
                 plant.name,
                 position.rms_joint_rad,
                 position.max_joint_rad,
                 position.final_joint_rad,
+                position.settle_collisions.steps,
+                position.path_collisions.steps,
+                position.hold_collisions.steps,
+                1e3 * position.max_penetration_m(),
                 if position.pass { "PASS" } else { "FAIL" },
                 velocity.rms_joint_rad,
                 velocity.max_joint_rad,
                 velocity.final_joint_rad,
+                velocity.settle_collisions.steps,
+                velocity.path_collisions.steps,
+                velocity.hold_collisions.steps,
+                1e3 * velocity.max_penetration_m(),
                 if velocity.pass { "PASS" } else { "FAIL" }
             )
             .expect("format tracking table");
         }
     }
 
-    let planner_passes = planning
-        .iter()
-        .filter(|row| row.status == PlanStatus::Success)
-        .count();
     let position_passes = tracking
         .iter()
         .filter(|row| row.controller == Controller::Position.name() && row.pass)
@@ -815,62 +964,192 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
         .iter()
         .filter(|row| row.controller == Controller::VelocityFf.name() && row.pass)
         .count();
+    let position_numeric_passes = tracking
+        .iter()
+        .filter(|row| row.controller == Controller::Position.name() && numeric_gates_pass(row))
+        .count();
+    let velocity_numeric_passes = tracking
+        .iter()
+        .filter(|row| row.controller == Controller::VelocityFf.name() && numeric_gates_pass(row))
+        .count();
+    let collision_cases: Vec<&TrackingRow> = tracking
+        .iter()
+        .filter(|row| row.collision_steps() > 0)
+        .collect();
+    let total_collision_steps: usize = collision_cases
+        .iter()
+        .map(|row| row.collision_steps())
+        .sum();
+    let max_penetration_m = collision_cases
+        .iter()
+        .map(|row| row.max_penetration_m())
+        .fold(0.0f64, f64::max);
+    let max_clearance_violation_m = collision_cases
+        .iter()
+        .map(|row| row.max_clearance_violation_m())
+        .fold(0.0f64, f64::max);
     writeln!(
         report,
-        "\n## Aggregate result\n\n- Planner: {planner_passes}/{} fixed-seed trials succeeded.\n- Position PD: {position_passes}/{} tracking cases passed.\n- PD + velocity feedforward: {velocity_passes}/{} tracking cases passed.\n",
-        planning.len(),
+        "\n## Aggregate result\n\n- Direct-free planner trials: {direct_successes}/{direct_trials} succeeded.\n- Obstructed planner trials: {obstructed_successes}/{obstructed_trials} succeeded.\n- Position PD: {position_numeric_passes}/{} meet the numeric tracking gates; {position_passes}/{} pass after the zero-collision requirement.\n- PD + velocity feedforward: {velocity_numeric_passes}/{} meet the numeric tracking gates; {velocity_passes}/{} pass after the zero-collision requirement.\n- Executed-contact audit: {}/{} cases have robot collision steps; {total_collision_steps} total phase-steps, maximum actual penetration {:.6} m, maximum {:.3}-m-clearance violation {:.6} m.\n",
         tracking.len() / 2,
-        tracking.len() / 2
+        tracking.len() / 2,
+        tracking.len() / 2,
+        tracking.len() / 2,
+        collision_cases.len(),
+        tracking.len(),
+        max_penetration_m,
+        EXECUTION_CLEARANCE_M,
+        max_clearance_violation_m
     )
     .expect("format aggregate result");
 
-    let velocity_failures: Vec<&TrackingRow> = tracking
-        .iter()
-        .filter(|row| row.controller == Controller::VelocityFf.name() && !row.pass)
-        .collect();
-    if !velocity_failures.is_empty()
-        && velocity_failures.iter().all(|row| {
-            row.rms_joint_rad <= PASS_RMS_RAD
-                && row.max_joint_rad <= PASS_MAX_RAD
-                && row.final_joint_rad > PASS_FINAL_RAD
-        })
-    {
-        let min_final = velocity_failures
-            .iter()
-            .map(|row| row.final_joint_rad)
-            .fold(f64::INFINITY, f64::min);
-        let max_final = velocity_failures
-            .iter()
-            .map(|row| row.final_joint_rad)
-            .fold(0.0f64, f64::max);
-        writeln!(
-            report,
-            "All {} velocity-feedforward misses pass the RMS and maximum-error gates but fail the unchanged final-hold gate, with final errors from {:.4} to {:.4} rad.",
-            velocity_failures.len(),
-            min_final,
-            max_final
-        )
-        .expect("format failure boundary");
+    if !collision_cases.is_empty() {
+        report.push_str(
+            "\n## Executed collision cases\n\n\
+             Collision steps are shown as settle/path/hold. The worst contact is selected by maximum clearance violation; signed distance below zero is actual penetration.\n\n\
+             | Scene | Query | Plant | Controller | Steps S/P/H | Max penetration (m) | Max clearance violation (m) | Worst phase / signed distance / geom pair |\n\
+             |---|---|---|---|---:|---:|---:|---|\n",
+        );
+        for row in &collision_cases {
+            let (phase, worst) = worst_collision(row);
+            writeln!(
+                report,
+                "| {} | {} | {} | {} | {}/{}/{} | {:.8} | {:.8} | {} / {:.8} / {} |",
+                row.scene,
+                row.query,
+                row.plant,
+                row.controller,
+                row.settle_collisions.steps,
+                row.path_collisions.steps,
+                row.hold_collisions.steps,
+                row.max_penetration_m(),
+                row.max_clearance_violation_m(),
+                phase,
+                worst
+                    .worst_contact_distance_m
+                    .expect("colliding phase signed distance"),
+                worst
+                    .worst_contact
+                    .as_deref()
+                    .expect("colliding phase identity")
+            )
+            .expect("format collision case");
+        }
     }
+
+    writeln!(
+        report,
+        "\nThe fixed `tabletop_pillar/reverse_cross_workspace` fixture is retained in full, including any collision-negative outcomes; no fixture or failed case is removed from either artifact."
+    )
+    .expect("format retained negative statement");
 
     report.push_str(
         "\n## Exact scope and limitations\n\n\
          - The fixtures are deterministic and hand-designed, not sampled from a scene or query distribution. These counts are not estimates of a workspace-wide success probability.\n\
          - All scenes use the same UR5e model and actuator interface. The open scene contains only a floor; the other two scenes are distinct layouts but both use pillar-like obstacles.\n\
-         - Five planner seeds probe sampling variability, but controller tracking uses one canonical path per query. Wall-clock planning times are machine- and load-dependent.\n\
+         - Five planner seeds probe sampling variability, but controller tracking uses one canonical path per query. `plan_elapsed_ms` is machine- and load-dependent, is not byte-stable, and is the only field ignored by `--check`.\n\
          - Only position PD and its desired-velocity-feedforward variant are compared here. This extension does not show that nominal-bias or integral-residual results generalize across queries.\n\
          - The combined plant is one deterministic condition: 1 kg payload at 0.10 m, 80% actuator gains, +1 Nms/rad joint damping, 10 ms command latency, and a 10 Nm / 120 ms shoulder-lift pulse at 45% of each trajectory. It is not a randomized uncertainty distribution.\n\
-         - Collision checks remain discrete at 0.05 rad in joint-space L2. Polyline corners remain unblended, so the scalar time law does not certify global acceleration or jerk. There is no sensor noise, contact-rich grasping, or hardware experiment.\n\n\
+         - Planner collision checks remain discrete at 0.05 rad in joint-space L2. Executed collision checks sample each 2-ms simulation state in settle, path, and hold; neither is a continuous swept-volume certificate. Polyline corners remain unblended, so the scalar time law does not certify global acceleration or jerk.\n\
+         - There is no sensor noise, contact-rich grasping, hardware experiment, or sim-to-real guarantee.\n\n\
          ## Reproduce\n\n\
          ```bash\n\
          cargo run --release -p arm-lab-demo --bin multi_query_bench -- --write\n\
+         cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check\n\
          ```\n\n\
-         Raw artifacts: `docs/multi_query_planning.csv` (all 45 planner trials, including exact joint vectors) and `docs/multi_query_tracking.csv` (all 36 tracking trials and complete metrics).\n",
+         Raw artifacts: `docs/multi_query_planning.csv` (all 45 planner trials, including exact joint vectors) and `docs/multi_query_tracking.csv` (all 36 tracking trials, numeric metrics, per-phase collision counts/depths, and worst contact identities).\n",
     );
 
-    std::fs::write(docs.join("multi_query_results.md"), report).expect("write Markdown report");
+    Artifacts {
+        planning_csv,
+        tracking_csv,
+        report,
+    }
+}
+
+fn docs_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs")
+}
+
+fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
+    let docs = docs_dir();
+    std::fs::create_dir_all(&docs).expect("create docs directory");
+    let artifacts = render_artifacts(planning, tracking);
+    std::fs::write(
+        docs.join("multi_query_planning.csv"),
+        artifacts.planning_csv,
+    )
+    .expect("write planning CSV");
+    std::fs::write(
+        docs.join("multi_query_tracking.csv"),
+        artifacts.tracking_csv,
+    )
+    .expect("write tracking CSV");
+    std::fs::write(docs.join("multi_query_results.md"), artifacts.report)
+        .expect("write Markdown report");
     println!(
         "wrote docs/multi_query_planning.csv, docs/multi_query_tracking.csv, and docs/multi_query_results.md"
+    );
+}
+
+fn check_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
+    let docs = docs_dir();
+    let generated = render_artifacts(planning, tracking);
+    let committed_planning = std::fs::read_to_string(docs.join("multi_query_planning.csv"))
+        .expect("read committed planning CSV");
+    let committed_tracking = std::fs::read_to_string(docs.join("multi_query_tracking.csv"))
+        .expect("read committed tracking CSV");
+    let committed_report = std::fs::read_to_string(docs.join("multi_query_results.md"))
+        .expect("read committed Markdown report");
+
+    assert_artifact_equal(
+        "planning CSV deterministic fields",
+        &normalize_planning_elapsed(&generated.planning_csv),
+        &normalize_planning_elapsed(&committed_planning),
+    );
+    assert_artifact_equal("tracking CSV", &generated.tracking_csv, &committed_tracking);
+    assert_artifact_equal("Markdown report", &generated.report, &committed_report);
+    println!(
+        "artifact check passed: all deterministic fields and outcomes match; plan_elapsed_ms ignored"
+    );
+}
+
+fn normalize_planning_elapsed(csv: &str) -> String {
+    let mut lines = csv.lines();
+    let header = lines.next().expect("planning CSV header");
+    let columns: Vec<&str> = header.split(',').collect();
+    let elapsed_index = columns
+        .iter()
+        .position(|column| *column == "plan_elapsed_ms")
+        .expect("plan_elapsed_ms column");
+    let mut normalized = format!("{header}\n");
+    for line in lines {
+        let mut fields: Vec<&str> = line.split(',').collect();
+        assert_eq!(
+            fields.len(),
+            columns.len(),
+            "planning CSV row has wrong column count"
+        );
+        fields[elapsed_index] = "<ignored-wall-clock>";
+        writeln!(normalized, "{}", fields.join(",")).expect("normalize planning CSV");
+    }
+    normalized
+}
+
+fn assert_artifact_equal(label: &str, generated: &str, committed: &str) {
+    if generated == committed {
+        return;
+    }
+    let mismatch = generated
+        .lines()
+        .zip(committed.lines())
+        .position(|(left, right)| left != right)
+        .map_or_else(
+            || generated.lines().count().min(committed.lines().count()) + 1,
+            |index| index + 1,
+        );
+    panic!(
+        "stale {label}: first mismatch at line {mismatch}; rerun with --write and audit changes"
     );
 }
 
@@ -905,5 +1184,30 @@ mod tests {
             }
         }
         assert_eq!(unique.len(), 6);
+    }
+
+    #[test]
+    fn artifact_normalizer_ignores_only_wall_clock_column() {
+        let header = "scene,plan_elapsed_ms,status\n";
+        let first = format!("{header}open,1.25000000,success\n");
+        let timing_only = format!("{header}open,99.00000000,success\n");
+        let stale_status = format!("{header}open,1.25000000,unconnected\n");
+        assert_eq!(
+            normalize_planning_elapsed(&first),
+            normalize_planning_elapsed(&timing_only)
+        );
+        assert_ne!(
+            normalize_planning_elapsed(&first),
+            normalize_planning_elapsed(&stale_status)
+        );
+    }
+
+    #[test]
+    fn collision_violation_is_penetration_plus_clearance() {
+        let signed_distance: f64 = -0.004;
+        let penetration = (-signed_distance).max(0.0);
+        let violation = (EXECUTION_CLEARANCE_M - signed_distance).max(0.0);
+        assert!((penetration - 0.004).abs() < 1e-12);
+        assert!((violation - 0.005).abs() < 1e-12);
     }
 }

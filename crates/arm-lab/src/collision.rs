@@ -16,6 +16,30 @@ use mujoco_rs::prelude::*;
 
 use crate::chain::Chain;
 
+/// A robot-involved MuJoCo contact below the checker's clearance threshold.
+///
+/// `distance_m` is MuJoCo's signed contact distance: negative values are
+/// penetration, while positive values below [`CollisionChecker::clearance`]
+/// violate the requested safety margin without geometric penetration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RobotContact {
+    pub geom1_id: i32,
+    pub geom2_id: i32,
+    pub geom1_name: String,
+    pub geom2_name: String,
+    pub distance_m: f64,
+}
+
+impl RobotContact {
+    /// Stable human-readable identity for raw benchmark artifacts.
+    pub fn identity(&self) -> String {
+        format!(
+            "{}[{}] vs {}[{}]",
+            self.geom1_name, self.geom1_id, self.geom2_name, self.geom2_id
+        )
+    }
+}
+
 /// MuJoCo-backed collision oracle for a serial chain.
 pub struct CollisionChecker<M: Deref<Target = MjModel>> {
     data: MjData<M>,
@@ -77,22 +101,45 @@ impl<M: Deref<Target = MjModel>> CollisionChecker<M> {
 
     /// True if configuration `q` is in collision.
     pub fn collides(&mut self, q: &[f64]) -> bool {
+        self.update_contacts(q);
+        self.data.contact().iter().any(|contact| {
+            contact.dist < self.clearance && self.contact_involves_robot(contact.geom)
+        })
+    }
+
+    /// Robot-involved contacts whose signed distance is below `clearance`.
+    ///
+    /// This uses exactly the same contact filter and strict distance comparison
+    /// as [`Self::collides`], but retains geom identity and signed distance for
+    /// execution audits.
+    pub fn robot_contacts(&mut self, q: &[f64]) -> Vec<RobotContact> {
+        self.update_contacts(q);
+        let model = self.data.model();
+        self.data
+            .contact()
+            .iter()
+            .filter(|contact| {
+                contact.dist < self.clearance && self.contact_involves_robot(contact.geom)
+            })
+            .map(|contact| RobotContact {
+                geom1_id: contact.geom[0],
+                geom2_id: contact.geom[1],
+                geom1_name: geom_name(model, contact.geom[0]),
+                geom2_name: geom_name(model, contact.geom[1]),
+                distance_m: contact.dist,
+            })
+            .collect()
+    }
+
+    fn update_contacts(&mut self, q: &[f64]) {
         self.set_q(q);
         self.data.forward_kinematics();
         self.data.collision();
-        for c in self.data.contact() {
-            if c.dist >= self.clearance {
-                continue;
-            }
-            let g1 = c.geom[0];
-            let g2 = c.geom[1];
-            let r1 = g1 >= 0 && self.robot_geom[g1 as usize];
-            let r2 = g2 >= 0 && self.robot_geom[g2 as usize];
-            if r1 || r2 {
-                return true;
-            }
-        }
-        false
+    }
+
+    fn contact_involves_robot(&self, geom: [i32; 2]) -> bool {
+        geom.into_iter()
+            .any(|id| id >= 0 && self.robot_geom[id as usize])
     }
 
     /// Borrow the inner [`MjData`] (e.g. to read body poses after `set_q`).
@@ -104,4 +151,14 @@ impl<M: Deref<Target = MjModel>> CollisionChecker<M> {
     pub fn data_mut(&mut self) -> &mut MjData<M> {
         &mut self.data
     }
+}
+
+fn geom_name(model: &MjModel, id: i32) -> String {
+    if id < 0 {
+        return "none".to_string();
+    }
+    model
+        .id_to_name(MjtObj::mjOBJ_GEOM, id as usize)
+        .filter(|name| !name.is_empty())
+        .map_or_else(|| format!("geom#{id}"), str::to_string)
 }
