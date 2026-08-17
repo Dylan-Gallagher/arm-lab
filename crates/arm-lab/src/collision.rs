@@ -27,6 +27,8 @@ pub struct RobotContact {
     pub geom2_id: i32,
     pub geom1_name: String,
     pub geom2_name: String,
+    pub body1_name: String,
+    pub body2_name: String,
     pub distance_m: f64,
 }
 
@@ -34,8 +36,13 @@ impl RobotContact {
     /// Stable human-readable identity for raw benchmark artifacts.
     pub fn identity(&self) -> String {
         format!(
-            "{}[{}] vs {}[{}]",
-            self.geom1_name, self.geom1_id, self.geom2_name, self.geom2_id
+            "{}[{}]@{} vs {}[{}]@{}",
+            self.geom1_name,
+            self.geom1_id,
+            self.body1_name,
+            self.geom2_name,
+            self.geom2_id,
+            self.body2_name
         )
     }
 }
@@ -126,6 +133,8 @@ impl<M: Deref<Target = MjModel>> CollisionChecker<M> {
                 geom2_id: contact.geom[1],
                 geom1_name: geom_name(model, contact.geom[0]),
                 geom2_name: geom_name(model, contact.geom[1]),
+                body1_name: geom_body_name(model, contact.geom[0]),
+                body2_name: geom_body_name(model, contact.geom[1]),
                 distance_m: contact.dist,
             })
             .collect()
@@ -161,4 +170,15 @@ fn geom_name(model: &MjModel, id: i32) -> String {
         .id_to_name(MjtObj::mjOBJ_GEOM, id as usize)
         .filter(|name| !name.is_empty())
         .map_or_else(|| format!("geom#{id}"), str::to_string)
+}
+
+fn geom_body_name(model: &MjModel, geom_id: i32) -> String {
+    if geom_id < 0 {
+        return "none".to_string();
+    }
+    let body_id = model.geom_bodyid()[geom_id as usize] as usize;
+    model
+        .id_to_name(MjtObj::mjOBJ_BODY, body_id)
+        .filter(|name| !name.is_empty())
+        .map_or_else(|| format!("body#{body_id}"), str::to_string)
 }

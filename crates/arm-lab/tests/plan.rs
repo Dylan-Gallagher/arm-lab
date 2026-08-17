@@ -197,6 +197,8 @@ fn collision_audit_matches_boolean_and_identifies_pillar() {
         contact.distance_m < checker.clearance
             && !contact.geom1_name.is_empty()
             && !contact.geom2_name.is_empty()
+            && !contact.body1_name.is_empty()
+            && !contact.body2_name.is_empty()
     }));
     assert!(
         contacts

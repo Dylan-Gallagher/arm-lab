@@ -37,9 +37,9 @@ The generated [full results](docs/robustness_results.md) and [raw CSV](docs/robu
 
 ## Multi-scene, multi-query extension (simulation)
 
-`multi_query_bench` adds nine fixed scene-query fixtures (three per shipped MJCF scene, six unique joint-pair definitions) while retaining the original declared tracking thresholds. Selected joint pairs are deliberately repeated across scenes to isolate geometry effects. Across five fixed planner seeds per fixture, all **45/45** plans succeeded; three fixtures had collision-blocked straight interpolants. Position PD passed **0/18** nominal-plus-combined-shift tracking cases. Adding desired-velocity feedforward passed **9/9 nominal** and **5/9 combined-shift** cases. The four combined-shift misses are retained in the raw evidence: their final errors exceed the 0.02-rad hold gate even though RMS and maximum errors remain inside their gates.
+`multi_query_bench` adds nine fixed scene-query fixtures (three per shipped MJCF scene, six unique joint-pair definitions) while retaining the original declared numeric tracking thresholds. Selected joint pairs are deliberately repeated across scenes to isolate geometry effects. Across five fixed planner seeds per fixture, all **30/30 direct-free** and **15/15 obstructed** trials succeeded. Executed states are then checked after every settling, path, and hold step using the same 1-mm robot-contact semantics as the planner; a case passes only with zero collision steps.
 
-The generated [report](docs/multi_query_results.md), [45-row planning CSV](docs/multi_query_planning.csv), and [36-row tracking CSV](docs/multi_query_tracking.csv) contain the exact joint vectors, seeds, trajectory metrics, tracking metrics, pass criteria, and claim boundaries. The fixtures are hand-designed and deterministic, not a sampled task distribution; the results do not estimate hardware or workspace-wide success probability.
+Position PD passes **0/18** tracking cases. Desired-velocity feedforward meets the numeric gates in **14/18** cases and passes the full collision-aware gate in **13/18**. All four executed collision cases are the retained `reverse_cross_workspace` negative: 25--72 path steps depending on plant/controller, with 0.050--0.079 mm maximum actual penetration; settling and hold remain collision-free. The generated [report](docs/multi_query_results.md), [45-row planning CSV](docs/multi_query_planning.csv), and [36-row tracking CSV](docs/multi_query_tracking.csv) include exact joint vectors, seeds, trajectory metrics, per-phase collision counts/depths and contact identities, pass criteria, and claim boundaries. The fixtures are hand-designed and deterministic, not a sampled task distribution; the results do not estimate hardware or workspace-wide success probability.
 
 ## Layout
 
@@ -81,6 +81,9 @@ cargo run --release -p arm-lab-demo --bin robustness_bench -- --write
 
 # three scenes × three fixed queries; write planning/tracking CSVs + report
 cargo run --release -p arm-lab-demo --bin multi_query_bench -- --write
+
+# rerun the bounded matrix and verify deterministic committed fields/outcomes
+cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
 ```
 
 Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time. Set `MUJOCO_DOWNLOAD_DIR` to an absolute directory before building and add its downloaded `lib/` directory to `LD_LIBRARY_PATH` before running; see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs).

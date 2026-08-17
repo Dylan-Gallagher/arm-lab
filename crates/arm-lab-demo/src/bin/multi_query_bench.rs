@@ -635,10 +635,7 @@ fn run_tracking_case(
     let final_joint = l2(&read_q(&data, chain), q_goal);
     let rms_joint = (sum_sq / samples as f64).sqrt();
     let collision_steps = settle_collisions.steps + path_collisions.steps + hold_collisions.steps;
-    let pass = rms_joint <= PASS_RMS_RAD
-        && max_joint <= PASS_MAX_RAD
-        && final_joint <= PASS_FINAL_RAD
-        && collision_steps == 0;
+    let pass = case_pass(rms_joint, max_joint, final_joint, collision_steps);
 
     TrackingRow {
         scene: scene.name,
@@ -717,6 +714,13 @@ fn numeric_gates_pass(row: &TrackingRow) -> bool {
     row.rms_joint_rad <= PASS_RMS_RAD
         && row.max_joint_rad <= PASS_MAX_RAD
         && row.final_joint_rad <= PASS_FINAL_RAD
+}
+
+fn case_pass(rms_joint: f64, max_joint: f64, final_joint: f64, collision_steps: usize) -> bool {
+    rms_joint <= PASS_RMS_RAD
+        && max_joint <= PASS_MAX_RAD
+        && final_joint <= PASS_FINAL_RAD
+        && collision_steps == 0
 }
 
 fn worst_collision(row: &TrackingRow) -> (&'static str, &CollisionPhaseMetrics) {
@@ -1209,5 +1213,17 @@ mod tests {
         let violation = (EXECUTION_CLEARANCE_M - signed_distance).max(0.0);
         assert!((penetration - 0.004).abs() < 1e-12);
         assert!((violation - 0.005).abs() < 1e-12);
+    }
+
+    #[test]
+    fn collision_step_invalidates_otherwise_passing_case() {
+        assert!(case_pass(0.01, 0.02, 0.01, 0));
+        assert!(!case_pass(0.01, 0.02, 0.01, 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "stale fixture")]
+    fn artifact_comparison_rejects_stale_deterministic_content() {
+        assert_artifact_equal("fixture", "expected\n", "stale\n");
     }
 }

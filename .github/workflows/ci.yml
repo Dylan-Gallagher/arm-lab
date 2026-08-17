@@ -39,6 +39,7 @@ jobs:
           export LD_LIBRARY_PATH="$MUJOCO_DOWNLOAD_DIR/mujoco-3.9.0/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cargo test --release -p arm-lab
           cargo test --release -p arm-lab-demo --bin multi_query_bench
+          cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
 
       - name: Build demo (no GL runtime needed to compile)
         run: cargo build --release -p arm-lab-demo
