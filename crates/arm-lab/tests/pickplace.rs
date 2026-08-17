@@ -72,6 +72,14 @@ fn home_is_free_and_poses_are_reachable() {
 }
 
 #[test]
+fn cube_is_visual_only() {
+    let (model, _, _) = load();
+    let cube_geom = model.name_to_id(MjtObj::mjOBJ_GEOM, "cube").unwrap();
+    assert_eq!(model.geom_contype()[cube_geom], 0);
+    assert_eq!(model.geom_conaffinity()[cube_geom], 0);
+}
+
+#[test]
 fn carry_straight_line_hits_pillar_rrt_succeeds() {
     let (model, chain, q_home) = load();
     let mut cc = CollisionChecker::new(&model, &chain);
