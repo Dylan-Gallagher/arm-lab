@@ -1,6 +1,10 @@
 # arm-lab
 
+[![Main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain)
+
 A serial-chain manipulator stack written **from scratch in Rust** — no ROS, no MoveIt, no kinematics library, no off-the-shelf planner.
+
+**Evidence index (simulation; sampled where collision claims are involved; no hardware validation):** [multi-scene report](docs/multi_query_results.md) · [planning CSV](docs/multi_query_planning.csv) · [tracking CSV](docs/multi_query_tracking.csv) · attached payload [protocol](docs/attached_payload_protocol.md) / [results](docs/attached_payload_results.md) · [robustness report](docs/robustness_results.md) · [main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain) · [citation](CITATION.cff)
 
 ![Demo 3 — UR5e pick-and-place around a pillar. IK, RRT-Connect, scalar S-curve time law, PD + velocity feedforward](docs/demo3.gif)
 

@@ -7,6 +7,13 @@ original arm collision predicate and RRT-Connect algorithm, then adds a second,
 pair-scoped predicate during the carry only: the 50 mm cube proxy must remain at
 least 5 mm from the named `floor`, `table`, and `pillar` geoms at sampled states.
 
+Targeted reproduction (after configuring the MuJoCo shared-library path as
+described in the repository README):
+
+```bash
+cargo test --release -p arm-lab --test pickplace attached_cube_blocks_straight_carry_and_planned_path_is_sampled_clear -- --exact --nocapture
+```
+
 ## Fixed-query result
 
 All figures below are deterministic geometry/path fields from seed `20260816`;
