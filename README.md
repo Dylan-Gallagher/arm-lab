@@ -4,7 +4,7 @@
 
 A serial-chain manipulator stack written **from scratch in Rust** — no ROS, no MoveIt, no kinematics library, no off-the-shelf planner.
 
-**Evidence index (simulation; sampled where collision claims are involved; no hardware validation):** [multi-scene report](docs/multi_query_results.md) · [planning CSV](docs/multi_query_planning.csv) · [tracking CSV](docs/multi_query_tracking.csv) · attached payload [protocol](docs/attached_payload_protocol.md) / [results](docs/attached_payload_results.md) · [robustness report](docs/robustness_results.md) · [main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain) · [citation](CITATION.cff)
+**Evidence index (simulation; sampled where collision claims are involved; no hardware validation):** randomized evaluation [protocol](docs/randomized_eval_protocol.md) / [report](docs/randomized_eval_results.md) / [queries](docs/randomized_eval_queries.csv) / [planning](docs/randomized_eval_planning.csv) / [tracking](docs/randomized_eval_tracking.csv) · [multi-scene report](docs/multi_query_results.md) · [planning CSV](docs/multi_query_planning.csv) · [tracking CSV](docs/multi_query_tracking.csv) · attached payload [protocol](docs/attached_payload_protocol.md) / [results](docs/attached_payload_results.md) · [robustness report](docs/robustness_results.md) · [main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain) · [citation](CITATION.cff)
 
 ![Demo 3 — UR5e pick-and-place around a pillar. IK, RRT-Connect, scalar S-curve time law, PD + velocity feedforward](docs/demo3.gif)
 
@@ -52,6 +52,12 @@ The [pre-result protocol](docs/attached_payload_protocol.md) and [result/limitat
 
 Position PD meets the numeric gates in **0/18** tracking cases. Desired-velocity feedforward meets the numeric gates in **14/18** cases and passes the full zero-penetration gate in **13/18**. The four sampled-penetration cases are all the retained `reverse_cross_workspace` negative: 25--72 path steps depending on plant/controller, with 0.050--0.079 mm maximum actual penetration; settling and hold remain penetration-free. The generated [report](docs/multi_query_results.md), [45-row planning CSV](docs/multi_query_planning.csv), and [36-row tracking CSV](docs/multi_query_tracking.csv) retain every outcome and include exact joint vectors, seeds, trajectory metrics, per-phase penetration counts/depths and contact identities, pass criteria, and claim boundaries. The fixtures are hand-designed and deterministic, not a sampled task distribution; the results do not estimate hardware or workspace-wide success probability.
 
+## Predeclared randomized extension (simulation)
+
+`randomized_eval` follows a [protocol committed before the evaluator and result-bearing runs](https://github.com/Dylan-Gallagher/arm-lab/commit/4320e40b6bf701d56e8e518597a9b0626d0205ec). It retains the first 100 accepted joint-space query pairs from a frozen generator in each of the three scenes (300 total), conditional only on collision-free endpoints and at least 0.75 rad separation. It does not select on direct-path or planner outcome. Only **83/300** queries have a sampled-clear straight interpolant. The unchanged canonical RRT-Connect configuration solves **138/300** (46.0%, 95% Wilson 40.4--51.7%) and recovers 55 of 217 blocked-direct pairs; all 162 unconnected outcomes remain in the raw artifacts. Five paired seeds on every blocked query produce 271/1,085 successes with the default 0.05 goal bias and 270/1,085 with goal bias removed, showing no material aggregate gain from that field in this frozen sample.
+
+Both nominal controllers replay every successful canonical trajectory. Position PD meets the numeric gates in **0/138** cases. Velocity feedforward meets them in **104/138** (75.4%, 95% Wilson 67.6--81.8%) and passes the added zero-sampled-penetration gate in **90/138** (65.2%, 95% Wilson 57.0--72.7%). Thirty-seven of 276 controller replays contain sampled penetration, with 3.2225 mm maximum depth; these failures are retained rather than hidden. See the pre-result [protocol](docs/randomized_eval_protocol.md), generated [report](docs/randomized_eval_results.md), and complete [query](docs/randomized_eval_queries.csv), [planning](docs/randomized_eval_planning.csv), and [tracking](docs/randomized_eval_tracking.csv) CSVs. The generator is uniform in compiled joint limits under the stated conditions, not uniform in Cartesian workspace or representative of real tasks; collision checks remain discrete and all evidence is simulation-only.
+
 ## Layout
 
 ```
@@ -95,6 +101,10 @@ cargo run --release -p arm-lab-demo --bin multi_query_bench -- --write
 
 # rerun the bounded matrix and verify deterministic committed fields/outcomes
 cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
+
+# predeclared 300-query randomized evaluation; write or verify all raw outcomes
+cargo run --release -p arm-lab-demo --bin randomized_eval -- --write
+cargo run --release -p arm-lab-demo --bin randomized_eval -- --check
 ```
 
 Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time. Set `MUJOCO_DOWNLOAD_DIR` to an absolute directory before building and add its downloaded `lib/` directory to `LD_LIBRARY_PATH` before running; see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs).
@@ -120,6 +130,7 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - [x] Reproducible controller robustness matrix with raw CSV and explicit sim-only limits
 - [x] Multi-scene, multi-query planning and tracking extension with raw CSVs
 - [x] Pair-scoped attached-cube collision proxy for Demo 3 carry
+- [x] Predeclared 300-query randomized planning and nominal-tracking evaluation
 
 ## License & assets
 

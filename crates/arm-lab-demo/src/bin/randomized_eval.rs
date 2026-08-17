@@ -829,9 +829,61 @@ fn render_report(
         queries.len() - pooled_direct
     )
     .expect("format pooled planning");
+    let canonical_unconnected = canonical
+        .iter()
+        .filter(|row| row.status == PlanStatus::Unconnected)
+        .count();
+    writeln!(
+        report,
+        "All 300 endpoint pairs pass the frozen endpoint predicate by construction. Canonical outcomes retain **{pooled_solved} success** and **{canonical_unconnected} unconnected** statuses; no failed query is removed.\n"
+    )
+    .expect("format canonical statuses");
 
     report.push_str("## Blocked-query goal-bias ablation\n\n");
     let blocked_queries: Vec<_> = queries.iter().filter(|row| !row.direct_free).collect();
+    report.push_str(
+        "| Scene | Blocked queries | Default successes | Zero-goal-bias successes |\n|---|---:|---:|---:|\n",
+    );
+    for scene in SCENES {
+        let scene_blocked = blocked_queries
+            .iter()
+            .filter(|query| query.scene == scene.name)
+            .count();
+        let default_rows: Vec<_> = planning
+            .iter()
+            .filter(|row| {
+                row.scene == scene.name
+                    && !row.direct_free
+                    && row.variant == PlannerVariant::Default
+            })
+            .collect();
+        let zero_rows: Vec<_> = planning
+            .iter()
+            .filter(|row| {
+                row.scene == scene.name
+                    && !row.direct_free
+                    && row.variant == PlannerVariant::ZeroGoalBias
+            })
+            .collect();
+        writeln!(
+            report,
+            "| {} | {} | {}/{} | {}/{} |",
+            scene.name,
+            scene_blocked,
+            default_rows
+                .iter()
+                .filter(|row| row.status == PlanStatus::Success)
+                .count(),
+            default_rows.len(),
+            zero_rows
+                .iter()
+                .filter(|row| row.status == PlanStatus::Success)
+                .count(),
+            zero_rows.len()
+        )
+        .expect("format scene ablation");
+    }
+    report.push('\n');
     for variant in [PlannerVariant::Default, PlannerVariant::ZeroGoalBias] {
         let rows: Vec<_> = planning
             .iter()
@@ -887,6 +939,51 @@ fn render_report(
             format_rate(full, rows.len())
         )
         .expect("format tracking summary");
+    }
+    report.push_str(
+        "\n### Scene and sampled-penetration breakdown\n\n| Scene | Controller | Replays | Numeric | Full | Penetration cases | Steps S/P/H | Max penetration (m) |\n|---|---|---:|---:|---:|---:|---:|---:|\n",
+    );
+    for scene in SCENES {
+        for controller in CONTROLLERS {
+            let rows: Vec<_> = tracking
+                .iter()
+                .filter(|row| row.scene == scene.name && row.controller == controller)
+                .collect();
+            let penetration_cases = rows
+                .iter()
+                .filter(|row| {
+                    row.settle_penetration_steps
+                        + row.path_penetration_steps
+                        + row.hold_penetration_steps
+                        > 0
+                })
+                .count();
+            let settle_steps: usize = rows.iter().map(|row| row.settle_penetration_steps).sum();
+            let path_steps: usize = rows.iter().map(|row| row.path_penetration_steps).sum();
+            let hold_steps: usize = rows.iter().map(|row| row.hold_penetration_steps).sum();
+            let max_penetration = rows
+                .iter()
+                .map(|row| row.max_penetration_m)
+                .fold(0.0f64, f64::max);
+            writeln!(
+                report,
+                "| {} | {} | {} | {}/{} | {}/{} | {}/{} | {}/{}/{} | {:.8} |",
+                scene.name,
+                controller.name(),
+                rows.len(),
+                rows.iter().filter(|row| row.numeric_pass).count(),
+                rows.len(),
+                rows.iter().filter(|row| row.full_pass).count(),
+                rows.len(),
+                penetration_cases,
+                rows.len(),
+                settle_steps,
+                path_steps,
+                hold_steps,
+                max_penetration
+            )
+            .expect("format scene tracking breakdown");
+        }
     }
 
     let mut ff_only = 0usize;
