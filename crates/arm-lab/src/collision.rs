@@ -1,14 +1,21 @@
 //! Collision queries against a compiled MuJoCo scene.
 //!
 //! The checker writes a joint configuration into `qpos`, runs MuJoCo
-//! kinematics + `mj_collision`, and reports a hit if any contact that
-//! involves a robot collision geom has signed distance below `clearance`.
+//! kinematics + `mj_collision`, and reports a hit if any **MuJoCo-emitted**
+//! contact that involves a robot collision geom has signed distance below
+//! `contact_threshold`.
 //!
 //! Parent–child and same-body pairs are already excluded by MuJoCo, so
 //! adjacent-link "contacts" never appear. Visual meshes (`contype = 0`)
 //! are ignored. Contacts that do not involve the robot (floor-vs-obstacle)
 //! are ignored too — those would otherwise flag every scene that has a
 //! pillar sitting on the ground plane.
+//!
+//! Important: `contact_threshold` filters contacts already emitted by MuJoCo;
+//! it is not a general pairwise-distance query. With zero geom margin/gap,
+//! separated positive-distance pairs might not be emitted even when their
+//! distance is below a positive threshold. Use a threshold of `0.0` when the
+//! required claim is sampled geometric penetration (`dist < 0`).
 
 use std::ops::Deref;
 
@@ -16,11 +23,11 @@ use mujoco_rs::prelude::*;
 
 use crate::chain::Chain;
 
-/// A robot-involved MuJoCo contact below the checker's clearance threshold.
+/// A robot-involved emitted MuJoCo contact below the checker's threshold.
 ///
 /// `distance_m` is MuJoCo's signed contact distance: negative values are
-/// penetration, while positive values below [`CollisionChecker::clearance`]
-/// violate the requested safety margin without geometric penetration.
+/// penetration. A positive value only means this pair happened to be emitted;
+/// it does not prove that every closer positive-distance pair was enumerated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RobotContact {
     pub geom1_id: i32,
@@ -54,9 +61,12 @@ pub struct CollisionChecker<M: Deref<Target = MjModel>> {
     /// `true` for geoms that belong to the robot and participate in contact
     /// (`contype != 0`). Indexed by MuJoCo geom id.
     robot_geom: Vec<bool>,
-    /// A contact counts as a collision when `dist < clearance` (meters).
-    /// Positive clearance inflates obstacles by that amount.
-    pub clearance: f64,
+    /// An **emitted** contact counts as a collision when
+    /// `dist < contact_threshold` (meters).
+    ///
+    /// This is a filter, not geometric inflation. Positive-distance pairs are
+    /// only considered when MuJoCo emitted them based on model margin/gap.
+    pub contact_threshold: f64,
 }
 
 impl<M: Deref<Target = MjModel>> CollisionChecker<M> {
@@ -89,7 +99,7 @@ impl<M: Deref<Target = MjModel>> CollisionChecker<M> {
             data,
             qpos_adr,
             robot_geom,
-            clearance: 1e-3,
+            contact_threshold: 1e-3,
         }
     }
 
@@ -110,11 +120,11 @@ impl<M: Deref<Target = MjModel>> CollisionChecker<M> {
     pub fn collides(&mut self, q: &[f64]) -> bool {
         self.update_contacts(q);
         self.data.contact().iter().any(|contact| {
-            contact.dist < self.clearance && self.contact_involves_robot(contact.geom)
+            contact.dist < self.contact_threshold && self.contact_involves_robot(contact.geom)
         })
     }
 
-    /// Robot-involved contacts whose signed distance is below `clearance`.
+    /// Robot-involved emitted contacts below [`Self::contact_threshold`].
     ///
     /// This uses exactly the same contact filter and strict distance comparison
     /// as [`Self::collides`], but retains geom identity and signed distance for
@@ -126,7 +136,7 @@ impl<M: Deref<Target = MjModel>> CollisionChecker<M> {
             .contact()
             .iter()
             .filter(|contact| {
-                contact.dist < self.clearance && self.contact_involves_robot(contact.geom)
+                contact.dist < self.contact_threshold && self.contact_involves_robot(contact.geom)
             })
             .map(|contact| RobotContact {
                 geom1_id: contact.geom[0],

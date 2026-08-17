@@ -50,7 +50,9 @@ const HOLD_STEPS: usize = 250;
 const PASS_RMS_RAD: f64 = 0.03;
 const PASS_MAX_RAD: f64 = 0.10;
 const PASS_FINAL_RAD: f64 = 0.02;
-const EXECUTION_CLEARANCE_M: f64 = 1e-3;
+/// Execution audit counts only emitted robot contacts with signed distance
+/// below zero: sampled geometric penetration, not a positive clearance claim.
+const EXECUTION_CONTACT_THRESHOLD_M: f64 = 0.0;
 const LIMITS: TrajLimits = TrajLimits {
     v_max: 0.55,
     a_max: 1.8,
@@ -238,7 +240,7 @@ struct TrackingRow {
 }
 
 impl TrackingRow {
-    fn collision_steps(&self) -> usize {
+    fn penetration_steps(&self) -> usize {
         self.settle_collisions.steps + self.path_collisions.steps + self.hold_collisions.steps
     }
 
@@ -248,20 +250,12 @@ impl TrackingRow {
             .max(self.path_collisions.max_penetration_m)
             .max(self.hold_collisions.max_penetration_m)
     }
-
-    fn max_clearance_violation_m(&self) -> f64 {
-        self.settle_collisions
-            .max_clearance_violation_m
-            .max(self.path_collisions.max_clearance_violation_m)
-            .max(self.hold_collisions.max_clearance_violation_m)
-    }
 }
 
 #[derive(Clone, Default)]
 struct CollisionPhaseMetrics {
     steps: usize,
     max_penetration_m: f64,
-    max_clearance_violation_m: f64,
     worst_contact_distance_m: Option<f64>,
     worst_contact: Option<String>,
 }
@@ -275,10 +269,8 @@ impl CollisionPhaseMetrics {
         self.steps += 1;
         for contact in contacts {
             let penetration = (-contact.distance_m).max(0.0);
-            let violation = (checker.clearance - contact.distance_m).max(0.0);
-            self.max_penetration_m = self.max_penetration_m.max(penetration);
-            if violation > self.max_clearance_violation_m {
-                self.max_clearance_violation_m = violation;
+            if penetration > self.max_penetration_m {
+                self.max_penetration_m = penetration;
                 self.worst_contact_distance_m = Some(contact.distance_m);
                 self.worst_contact = Some(contact.identity());
             }
@@ -416,13 +408,13 @@ fn main() {
                         &trajectory,
                     );
                     println!(
-                        "  {:<23} | {:<16} | rms {:>7.4} | max {:>7.4} | final {:>7.4} | collisions {:>4} | pen {:>7.3} mm | {}",
+                        "  {:<23} | {:<16} | rms {:>7.4} | max {:>7.4} | final {:>7.4} | penetration steps {:>4} | pen {:>7.3} mm | {}",
                         metrics.plant,
                         metrics.controller,
                         metrics.rms_joint_rad,
                         metrics.max_joint_rad,
                         metrics.final_joint_rad,
-                        metrics.collision_steps(),
+                        metrics.penetration_steps(),
                         1e3 * metrics.max_penetration_m(),
                         if metrics.pass { "PASS" } else { "FAIL" }
                     );
@@ -575,7 +567,7 @@ fn run_tracking_case(
     let zero = vec![0.0; chain.dof()];
     let mut queue = VecDeque::with_capacity(delay_steps + 1);
     let mut collision_checker = CollisionChecker::new(model, chain);
-    collision_checker.clearance = EXECUTION_CLEARANCE_M;
+    collision_checker.contact_threshold = EXECUTION_CONTACT_THRESHOLD_M;
     let mut settle_collisions = CollisionPhaseMetrics::default();
     let mut path_collisions = CollisionPhaseMetrics::default();
     let mut hold_collisions = CollisionPhaseMetrics::default();
@@ -634,8 +626,8 @@ fn run_tracking_case(
     }
     let final_joint = l2(&read_q(&data, chain), q_goal);
     let rms_joint = (sum_sq / samples as f64).sqrt();
-    let collision_steps = settle_collisions.steps + path_collisions.steps + hold_collisions.steps;
-    let pass = case_pass(rms_joint, max_joint, final_joint, collision_steps);
+    let penetration_steps = settle_collisions.steps + path_collisions.steps + hold_collisions.steps;
+    let pass = case_pass(rms_joint, max_joint, final_joint, penetration_steps);
 
     TrackingRow {
         scene: scene.name,
@@ -716,11 +708,11 @@ fn numeric_gates_pass(row: &TrackingRow) -> bool {
         && row.final_joint_rad <= PASS_FINAL_RAD
 }
 
-fn case_pass(rms_joint: f64, max_joint: f64, final_joint: f64, collision_steps: usize) -> bool {
+fn case_pass(rms_joint: f64, max_joint: f64, final_joint: f64, penetration_steps: usize) -> bool {
     rms_joint <= PASS_RMS_RAD
         && max_joint <= PASS_MAX_RAD
         && final_joint <= PASS_FINAL_RAD
-        && collision_steps == 0
+        && penetration_steps == 0
 }
 
 fn worst_collision(row: &TrackingRow) -> (&'static str, &CollisionPhaseMetrics) {
@@ -730,10 +722,7 @@ fn worst_collision(row: &TrackingRow) -> (&'static str, &CollisionPhaseMetrics) 
         ("hold", &row.hold_collisions),
     ]
     .into_iter()
-    .max_by(|(_, left), (_, right)| {
-        left.max_clearance_violation_m
-            .total_cmp(&right.max_clearance_violation_m)
-    })
+    .max_by(|(_, left), (_, right)| left.max_penetration_m.total_cmp(&right.max_penetration_m))
     .expect("three collision phases")
 }
 
@@ -791,12 +780,12 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
         .expect("format planning CSV");
     }
     let mut tracking_csv = String::from(
-        "scene,scene_file,query,seed,direct_path_free,plant,controller,trajectory_samples,trajectory_duration_s,rms_joint_rad,max_joint_rad,final_joint_rad,max_ee_pos_m,peak_force_fraction,saturated_step_fraction,settle_collision_steps,settle_max_penetration_m,settle_max_clearance_violation_m,settle_worst_contact_distance_m,settle_worst_contact,path_collision_steps,path_max_penetration_m,path_max_clearance_violation_m,path_worst_contact_distance_m,path_worst_contact,hold_collision_steps,hold_max_penetration_m,hold_max_clearance_violation_m,hold_worst_contact_distance_m,hold_worst_contact,collision_steps,max_penetration_m,max_clearance_violation_m,pass\n",
+        "scene,scene_file,query,seed,direct_path_free,plant,controller,trajectory_samples,trajectory_duration_s,rms_joint_rad,max_joint_rad,final_joint_rad,max_ee_pos_m,peak_force_fraction,saturated_step_fraction,settle_penetration_steps,settle_max_penetration_m,settle_worst_contact_distance_m,settle_worst_contact,path_penetration_steps,path_max_penetration_m,path_worst_contact_distance_m,path_worst_contact,hold_penetration_steps,hold_max_penetration_m,hold_worst_contact_distance_m,hold_worst_contact,penetration_steps,max_penetration_m,pass\n",
     );
     for row in tracking {
         writeln!(
             tracking_csv,
-            "{},{},{},{},{},{},{},{},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{},{:.8},{:.8},{},{},{},{:.8},{:.8},{},{},{},{:.8},{:.8},{},{},{},{:.8},{:.8},{}",
+            "{},{},{},{},{},{},{},{},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{},{:.8},{},{},{},{:.8},{},{},{},{:.8},{},{},{},{:.8},{}",
             row.scene,
             row.scene_file,
             row.query,
@@ -814,22 +803,18 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
             row.saturated_step_fraction,
             row.settle_collisions.steps,
             row.settle_collisions.max_penetration_m,
-            row.settle_collisions.max_clearance_violation_m,
             format_optional_distance(row.settle_collisions.worst_contact_distance_m),
             row.settle_collisions.worst_contact.as_deref().unwrap_or(""),
             row.path_collisions.steps,
             row.path_collisions.max_penetration_m,
-            row.path_collisions.max_clearance_violation_m,
             format_optional_distance(row.path_collisions.worst_contact_distance_m),
             row.path_collisions.worst_contact.as_deref().unwrap_or(""),
             row.hold_collisions.steps,
             row.hold_collisions.max_penetration_m,
-            row.hold_collisions.max_clearance_violation_m,
             format_optional_distance(row.hold_collisions.worst_contact_distance_m),
             row.hold_collisions.worst_contact.as_deref().unwrap_or(""),
-            row.collision_steps(),
+            row.penetration_steps(),
             row.max_penetration_m(),
-            row.max_clearance_violation_m(),
             row.pass
         )
         .expect("format tracking CSV");
@@ -849,7 +834,7 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
         "# UR5e multi-scene, multi-query benchmark (simulation)\n\n\
          This deterministic extension evaluates **nine fixed scene-query fixtures (three per scene, six unique joint-pair definitions) across {} shipped MJCF scenes**. Repeating selected joint pairs across scenes creates controlled geometry comparisons. Five fixed planner seeds per fixture produce {} planning trials. The canonical-seed trajectory for each fixture is then replayed using two controller variants against the nominal plant and one fixed combined shift, producing {} tracking trials. Three fixtures have collision-blocked straight interpolants. **This is simulation evidence, not hardware validation or a sim-to-real guarantee.**\n\n\
          Planner headline: **{direct_successes}/{direct_trials} direct-free trials** and **{obstructed_successes}/{obstructed_trials} obstructed trials** succeeded.\n\n\
-         The numeric tracking limits are reused unchanged from the earlier robustness envelope: temporal RMS six-joint L2 error <= {:.2} rad, maximum error <= {:.2} rad, and final error after a {}-step hold <= {:.2} rad. In addition, a tracking case now passes only with **zero robot-collision steps** across settling, path execution, and hold under the repository's {:.3}-m clearance semantics. Signed contact distance, actual penetration, clearance violation, and worst geom pair are retained in the raw CSV.\n\n\
+         The numeric tracking limits are reused unchanged from the earlier robustness envelope: temporal RMS six-joint L2 error <= {:.2} rad, maximum error <= {:.2} rad, and final error after a {}-step hold <= {:.2} rad. In addition, a tracking case passes only with **zero sampled robot-penetration steps** across settling, path execution, and hold. The audit uses a contact threshold of exactly 0.0 m and counts only MuJoCo-emitted robot contacts with signed distance `< 0`; signed distance, maximum actual penetration, and worst geom/body pair are retained in the raw CSV. This is not a positive-clearance certificate.\n\n\
          `plan_elapsed_ms` is observational wall-clock data: it is machine- and load-dependent and is **not byte-stable**. The bounded `--check` mode ignores only that column while verifying every committed deterministic planning field, all tracking fields/outcomes, and this report.\n\n\
          ## Planning and trajectory summary\n\n\
          | Scene | Query | Direct interpolant | Planner success | Cost range (rad) | Canonical trajectory |\n\
@@ -860,8 +845,7 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
         PASS_RMS_RAD,
         PASS_MAX_RAD,
         HOLD_STEPS,
-        PASS_FINAL_RAD,
-        EXECUTION_CLEARANCE_M
+        PASS_FINAL_RAD
     );
 
     for query in QUERIES {
@@ -908,7 +892,7 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
 
     report.push_str(
         "\n## Tracking results\n\n\
-         Each cell is RMS / maximum / final six-joint L2 error in radians, followed by collision steps in settle/path/hold and maximum actual penetration. `PASS` requires all three numeric limits and zero collision steps.\n\n\
+         Each cell is RMS / maximum / final six-joint L2 error in radians, followed by sampled penetration steps in settle/path/hold and maximum actual penetration. `PASS` requires all three numeric limits and zero penetration steps.\n\n\
          | Scene | Query | Plant | Position PD | PD + velocity FF |\n\
          |---|---|---|---:|---:|\n",
     );
@@ -935,7 +919,7 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
                 .expect("velocity row");
             writeln!(
                 report,
-                "| {} | {} | {} | {:.4}/{:.4}/{:.4}; c {}/{}/{}; pen {:.3} mm {} | {:.4}/{:.4}/{:.4}; c {}/{}/{}; pen {:.3} mm {} |",
+                "| {} | {} | {} | {:.4}/{:.4}/{:.4}; p {}/{}/{}; pen {:.3} mm {} | {:.4}/{:.4}/{:.4}; p {}/{}/{}; pen {:.3} mm {} |",
                 scene.name,
                 query.name,
                 plant.name,
@@ -976,49 +960,43 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
         .iter()
         .filter(|row| row.controller == Controller::VelocityFf.name() && numeric_gates_pass(row))
         .count();
-    let collision_cases: Vec<&TrackingRow> = tracking
+    let penetration_cases: Vec<&TrackingRow> = tracking
         .iter()
-        .filter(|row| row.collision_steps() > 0)
+        .filter(|row| row.penetration_steps() > 0)
         .collect();
-    let total_collision_steps: usize = collision_cases
+    let total_penetration_steps: usize = penetration_cases
         .iter()
-        .map(|row| row.collision_steps())
+        .map(|row| row.penetration_steps())
         .sum();
-    let max_penetration_m = collision_cases
+    let max_penetration_m = penetration_cases
         .iter()
         .map(|row| row.max_penetration_m())
         .fold(0.0f64, f64::max);
-    let max_clearance_violation_m = collision_cases
-        .iter()
-        .map(|row| row.max_clearance_violation_m())
-        .fold(0.0f64, f64::max);
     writeln!(
         report,
-        "\n## Aggregate result\n\n- Direct-free planner trials: {direct_successes}/{direct_trials} succeeded.\n- Obstructed planner trials: {obstructed_successes}/{obstructed_trials} succeeded.\n- Position PD: {position_numeric_passes}/{} meet the numeric tracking gates; {position_passes}/{} pass after the zero-collision requirement.\n- PD + velocity feedforward: {velocity_numeric_passes}/{} meet the numeric tracking gates; {velocity_passes}/{} pass after the zero-collision requirement.\n- Executed-contact audit: {}/{} cases have robot collision steps; {total_collision_steps} total phase-steps, maximum actual penetration {:.6} m, maximum {:.3}-m-clearance violation {:.6} m.\n",
+        "\n## Aggregate result\n\n- Direct-free planner trials: {direct_successes}/{direct_trials} succeeded.\n- Obstructed planner trials: {obstructed_successes}/{obstructed_trials} succeeded.\n- Position PD: {position_numeric_passes}/{} meet the numeric tracking gates; {position_passes}/{} pass after the zero-penetration requirement.\n- PD + velocity feedforward: {velocity_numeric_passes}/{} meet the numeric tracking gates; {velocity_passes}/{} pass after the zero-penetration requirement.\n- Executed-penetration audit: {}/{} cases have sampled robot penetration; {total_penetration_steps} total phase-steps, maximum actual penetration {:.8} m.\n",
         tracking.len() / 2,
         tracking.len() / 2,
         tracking.len() / 2,
         tracking.len() / 2,
-        collision_cases.len(),
+        penetration_cases.len(),
         tracking.len(),
-        max_penetration_m,
-        EXECUTION_CLEARANCE_M,
-        max_clearance_violation_m
+        max_penetration_m
     )
     .expect("format aggregate result");
 
-    if !collision_cases.is_empty() {
+    if !penetration_cases.is_empty() {
         report.push_str(
-            "\n## Executed collision cases\n\n\
-             Collision steps are shown as settle/path/hold. The worst contact is selected by maximum clearance violation; signed distance below zero is actual penetration.\n\n\
-             | Scene | Query | Plant | Controller | Steps S/P/H | Max penetration (m) | Max clearance violation (m) | Worst phase / signed distance / geom pair |\n\
-             |---|---|---|---|---:|---:|---:|---|\n",
+            "\n## Executed penetration cases\n\n\
+             Penetration steps are shown as settle/path/hold. The worst emitted contact is selected by maximum actual penetration; every listed signed distance is below zero.\n\n\
+             | Scene | Query | Plant | Controller | Steps S/P/H | Max penetration (m) | Worst phase / signed distance / geom pair |\n\
+             |---|---|---|---|---:|---:|---|\n",
         );
-        for row in &collision_cases {
+        for row in &penetration_cases {
             let (phase, worst) = worst_collision(row);
             writeln!(
                 report,
-                "| {} | {} | {} | {} | {}/{}/{} | {:.8} | {:.8} | {} / {:.8} / {} |",
+                "| {} | {} | {} | {} | {}/{}/{} | {:.8} | {} / {:.8} / {} |",
                 row.scene,
                 row.query,
                 row.plant,
@@ -1027,7 +1005,6 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
                 row.path_collisions.steps,
                 row.hold_collisions.steps,
                 row.max_penetration_m(),
-                row.max_clearance_violation_m(),
                 phase,
                 worst
                     .worst_contact_distance_m
@@ -1043,7 +1020,7 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
 
     writeln!(
         report,
-        "\nThe fixed `tabletop_pillar/reverse_cross_workspace` fixture is retained in full, including any collision-negative outcomes; no fixture or failed case is removed from either artifact."
+        "\nThe fixed `tabletop_pillar/reverse_cross_workspace` fixture is retained in full, including any penetration-failing outcomes; no fixture or failed case is removed from either artifact."
     )
     .expect("format retained negative statement");
 
@@ -1054,14 +1031,15 @@ fn render_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) -> Artif
          - Five planner seeds probe sampling variability, but controller tracking uses one canonical path per query. `plan_elapsed_ms` is machine- and load-dependent, is not byte-stable, and is the only field ignored by `--check`.\n\
          - Only position PD and its desired-velocity-feedforward variant are compared here. This extension does not show that nominal-bias or integral-residual results generalize across queries.\n\
          - The combined plant is one deterministic condition: 1 kg payload at 0.10 m, 80% actuator gains, +1 Nms/rad joint damping, 10 ms command latency, and a 10 Nm / 120 ms shoulder-lift pulse at 45% of each trajectory. It is not a randomized uncertainty distribution.\n\
-         - Planner collision checks remain discrete at 0.05 rad in joint-space L2. Executed collision checks sample each 2-ms simulation state in settle, path, and hold; neither is a continuous swept-volume certificate. Polyline corners remain unblended, so the scalar time law does not certify global acceleration or jerk.\n\
+         - Planner collision checks remain discrete at 0.05 rad in joint-space L2 and use MuJoCo's emitted-contact set. The repository's positive contact threshold filters emitted candidates; with these zero-margin geoms it does not establish positive geometric clearance. Planner behavior is retained, but no 1-mm-clearance claim is made.\n\
+         - The execution gate checks signed distance `< 0` at each 2-ms simulation state in settle, path, and hold. It detects sampled penetration, not positive-distance near misses or continuous swept-volume collision between samples. Polyline corners remain unblended, so the scalar time law does not certify global acceleration or jerk.\n\
          - There is no sensor noise, contact-rich grasping, hardware experiment, or sim-to-real guarantee.\n\n\
          ## Reproduce\n\n\
          ```bash\n\
          cargo run --release -p arm-lab-demo --bin multi_query_bench -- --write\n\
          cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check\n\
          ```\n\n\
-         Raw artifacts: `docs/multi_query_planning.csv` (all 45 planner trials, including exact joint vectors) and `docs/multi_query_tracking.csv` (all 36 tracking trials, numeric metrics, per-phase collision counts/depths, and worst contact identities).\n",
+         Raw artifacts: `docs/multi_query_planning.csv` (all 45 planner trials, including exact joint vectors) and `docs/multi_query_tracking.csv` (all 36 tracking trials, numeric metrics, per-phase penetration counts/depths, and worst emitted-contact identities).\n",
     );
 
     Artifacts {
@@ -1207,16 +1185,15 @@ mod tests {
     }
 
     #[test]
-    fn collision_violation_is_penetration_plus_clearance() {
+    fn execution_audit_uses_zero_threshold_and_actual_penetration() {
         let signed_distance: f64 = -0.004;
         let penetration = (-signed_distance).max(0.0);
-        let violation = (EXECUTION_CLEARANCE_M - signed_distance).max(0.0);
+        assert_eq!(EXECUTION_CONTACT_THRESHOLD_M, 0.0);
         assert!((penetration - 0.004).abs() < 1e-12);
-        assert!((violation - 0.005).abs() < 1e-12);
     }
 
     #[test]
-    fn collision_step_invalidates_otherwise_passing_case() {
+    fn penetration_step_invalidates_otherwise_passing_case() {
         assert!(case_pass(0.01, 0.02, 0.01, 0));
         assert!(!case_pass(0.01, 0.02, 0.01, 1));
     }
