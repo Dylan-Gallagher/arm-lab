@@ -2,10 +2,11 @@
 //!
 //! This executable complements, rather than replaces, the single-trajectory
 //! controller robustness envelope. It evaluates five planner seeds on nine
-//! fixed queries across all three shipped UR5e scenes. The canonical-seed
-//! trajectory for every query is then replayed with position PD and position
-//! PD plus desired-velocity feedforward, both on the nominal plant and on the
-//! same fixed combined plant shift used by `robustness_bench`.
+//! fixed scene-query fixtures (six unique joint-pair definitions) across all
+//! three shipped UR5e scenes. The canonical-seed trajectory for every fixture
+//! is then replayed with position PD and with position PD plus desired-velocity
+//! feedforward, both on the nominal plant and on the same fixed combined plant
+//! shift used by `robustness_bench`.
 //!
 //! ```text
 //! cargo run --release -p arm-lab-demo --bin multi_query_bench
@@ -698,12 +699,11 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
 
     let mut report = format!(
         "# UR5e multi-scene, multi-query benchmark (simulation)\n\n\
-         This deterministic extension evaluates **{} fixed queries across {} shipped MJCF scenes**. Five fixed planner seeds per query produce {} planning trials. The canonical-seed trajectory for each query is then replayed using two controller variants against the nominal plant and one fixed combined shift, producing {} tracking trials. Three queries have collision-blocked straight interpolants. **This is simulation evidence, not hardware validation or a sim-to-real guarantee.**\n\n\
+         This deterministic extension evaluates **nine fixed scene-query fixtures (three per scene, six unique joint-pair definitions) across {} shipped MJCF scenes**. Repeating selected joint pairs across scenes creates controlled geometry comparisons. Five fixed planner seeds per fixture produce {} planning trials. The canonical-seed trajectory for each fixture is then replayed using two controller variants against the nominal plant and one fixed combined shift, producing {} tracking trials. Three fixtures have collision-blocked straight interpolants. **This is simulation evidence, not hardware validation or a sim-to-real guarantee.**\n\n\
          The tracking pass limits are reused unchanged from the earlier robustness envelope: temporal RMS six-joint L2 error <= {:.2} rad, maximum error <= {:.2} rad, and final error after a {}-step hold <= {:.2} rad. They were declared in code before this benchmark was executed.\n\n\
          ## Planning and trajectory summary\n\n\
          | Scene | Query | Direct interpolant | Planner success | Median plan (ms) | Cost range (rad) | Canonical trajectory |\n\
          |---|---|:---:|:---:|---:|---:|---:|\n",
-        QUERIES.len(),
         SCENES.len(),
         planning.len(),
         tracking.len(),
@@ -824,6 +824,35 @@ fn write_artifacts(planning: &[PlanningRow], tracking: &[TrackingRow]) {
     )
     .expect("format aggregate result");
 
+    let velocity_failures: Vec<&TrackingRow> = tracking
+        .iter()
+        .filter(|row| row.controller == Controller::VelocityFf.name() && !row.pass)
+        .collect();
+    if !velocity_failures.is_empty()
+        && velocity_failures.iter().all(|row| {
+            row.rms_joint_rad <= PASS_RMS_RAD
+                && row.max_joint_rad <= PASS_MAX_RAD
+                && row.final_joint_rad > PASS_FINAL_RAD
+        })
+    {
+        let min_final = velocity_failures
+            .iter()
+            .map(|row| row.final_joint_rad)
+            .fold(f64::INFINITY, f64::min);
+        let max_final = velocity_failures
+            .iter()
+            .map(|row| row.final_joint_rad)
+            .fold(0.0f64, f64::max);
+        writeln!(
+            report,
+            "All {} velocity-feedforward misses pass the RMS and maximum-error gates but fail the unchanged final-hold gate, with final errors from {:.4} to {:.4} rad.",
+            velocity_failures.len(),
+            min_final,
+            max_final
+        )
+        .expect("format failure boundary");
+    }
+
     report.push_str(
         "\n## Exact scope and limitations\n\n\
          - The fixtures are deterministic and hand-designed, not sampled from a scene or query distribution. These counts are not estimates of a workspace-wide success probability.\n\
@@ -864,5 +893,17 @@ mod tests {
     #[test]
     fn canonical_seed_is_in_planner_seed_set() {
         assert!(SEEDS.contains(&CANONICAL_SEED));
+    }
+
+    #[test]
+    fn repeated_fixtures_leave_six_unique_joint_pairs() {
+        let mut unique = Vec::new();
+        for query in QUERIES {
+            let pair = (query.start_delta, query.goal_delta);
+            if !unique.contains(&pair) {
+                unique.push(pair);
+            }
+        }
+        assert_eq!(unique.len(), 6);
     }
 }

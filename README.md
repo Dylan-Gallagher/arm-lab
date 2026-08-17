@@ -35,6 +35,12 @@ The 1 s median planning-time exit criterion is met by two orders of magnitude. T
 
 The generated [full results](docs/robustness_results.md) and [raw CSV](docs/robustness_results.csv) state their pass thresholds and limitations. This is a simulation stress test, not hardware validation or a sim-to-real guarantee.
 
+## Multi-scene, multi-query extension (simulation)
+
+`multi_query_bench` adds nine fixed scene-query fixtures (three per shipped MJCF scene, six unique joint-pair definitions) while retaining the original declared tracking thresholds. Selected joint pairs are deliberately repeated across scenes to isolate geometry effects. Across five fixed planner seeds per fixture, all **45/45** plans succeeded; three fixtures had collision-blocked straight interpolants. Position PD passed **0/18** nominal-plus-combined-shift tracking cases. Adding desired-velocity feedforward passed **9/9 nominal** and **5/9 combined-shift** cases. The four combined-shift misses are retained in the raw evidence: their final errors exceed the 0.02-rad hold gate even though RMS and maximum errors remain inside their gates.
+
+The generated [report](docs/multi_query_results.md), [45-row planning CSV](docs/multi_query_planning.csv), and [36-row tracking CSV](docs/multi_query_tracking.csv) contain the exact joint vectors, seeds, trajectory metrics, tracking metrics, pass criteria, and claim boundaries. The fixtures are hand-designed and deterministic, not a sampled task distribution; the results do not estimate hardware or workspace-wide success probability.
+
 ## Layout
 
 ```
@@ -72,6 +78,9 @@ cargo run --release -p arm-lab-demo --bin demo3 -- --connect
 
 # deterministic controller-ablation × plant-shift matrix; write Markdown + CSV
 cargo run --release -p arm-lab-demo --bin robustness_bench -- --write
+
+# three scenes × three fixed queries; write planning/tracking CSVs + report
+cargo run --release -p arm-lab-demo --bin multi_query_bench -- --write
 ```
 
 Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time. Set `MUJOCO_DOWNLOAD_DIR` to an absolute directory before building and add its downloaded `lib/` directory to `LD_LIBRARY_PATH` before running; see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs).
@@ -94,6 +103,7 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - [x] Jerk-bounded scalar S-curve time law; joint-space PD + velocity feedforward
 - [x] Pick-and-place with obstacle dodging; benchmark tables
 - [x] Reproducible controller robustness matrix with raw CSV and explicit sim-only limits
+- [x] Multi-scene, multi-query planning and tracking extension with raw CSVs
 
 ## License & assets
 
