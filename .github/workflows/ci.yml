@@ -40,8 +40,10 @@ jobs:
           cargo test --release -p arm-lab
           cargo test --release -p arm-lab-demo --bin multi_query_bench
           cargo test --release -p arm-lab-demo --bin randomized_eval
+          cargo test --release -p arm-lab-demo --bin oxmpl_baseline
           cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
           cargo run --release -p arm-lab-demo --bin randomized_eval -- --check
+          cargo run --release -p arm-lab-demo --bin oxmpl_baseline -- --verify-artifacts
 
       - name: Build demo (no GL runtime needed to compile)
         run: cargo build --release -p arm-lab-demo

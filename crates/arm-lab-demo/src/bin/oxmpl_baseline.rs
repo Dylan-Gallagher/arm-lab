@@ -829,7 +829,7 @@ fn render_report(rows: &[ResultRow]) -> String {
     .expect("render pooled headline");
     writeln!(
         report,
-        "Paired outcomes: **{} both**, **{} in-repository only**, **{} OxMPL only**, and **{} neither**; exact two-sided McNemar/binomial p = **{p_value:.8}**.\n",
+        "Paired outcomes: **{} both**, **{} in-repository only**, **{} OxMPL only**, and **{} neither**; the predeclared exact two-sided McNemar/binomial calculation is **{p_value:.8}**. Because five seeds share each query, this calculation is descriptive only and does not satisfy independent-pair assumptions.\n",
         pooled.both, pooled.in_house_only, pooled.oxmpl_only, pooled.neither
     )
     .expect("render paired headline");
@@ -887,11 +887,18 @@ fn render_report(rows: &[ResultRow]) -> String {
     );
 
     report.push_str(
+        "The exact host, two-run resource measurements, artifact hashes, and \
+         deterministic comparison gate are recorded in \
+         [`docs/oxmpl_baseline_validation.md`](oxmpl_baseline_validation.md).\n\n",
+    );
+
+    report.push_str(
         "## Interpretation boundaries\n\n\
          - This is a cross-implementation comparison on one frozen cohort, not evidence that either planner is universally better.\n\
-         - Five seeds for one query are repeated algorithm trials, not independent task draws. McNemar describes only these paired trials; no population confidence interval is attached.\n\
+         - Five seeds for one query are repeated algorithm trials, not independent task draws. The retained seed-level McNemar/binomial calculation is descriptive, not a valid population significance test; no population confidence interval is attached.\n\
          - Path lengths are retained in the CSV only as diagnostics. The in-repository path is shortcut and densified; OxMPL returns a raw tree path, so cost is not a fair quality comparison.\n\
          - OxMPL's timeout is wall-clock-bound. Two consecutive runs on the recorded host must agree, but materially different hardware can change borderline timeout outcomes.\n\
+         - Seed integers and replicate indices are paired, but arm-lab and OxMPL use different PRNGs; they do not receive identical random samples.\n\
          - Collision checks sample configurations and MuJoCo emitted contacts. They do not certify continuous avoidance or positive clearance.\n\
          - This is deterministic simulation evidence: no hardware, grasp-success, uncertainty, or sim-to-real claim is introduced.\n\n\
          ## Reproduce\n\n\
