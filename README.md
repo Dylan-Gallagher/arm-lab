@@ -2,9 +2,9 @@
 
 [![Main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain)
 
-A serial-chain manipulator stack written **from scratch in Rust** — no ROS, no MoveIt, no kinematics library, no off-the-shelf planner.
+A serial-chain manipulator stack whose production algorithms are written **from scratch in Rust** — no ROS, MoveIt, kinematics library, or off-the-shelf production planner. Independently maintained OxMPL is pinned only in a separate evaluation binary for a cross-implementation baseline.
 
-**Evidence index (simulation; sampled where collision claims are involved; no hardware validation):** randomized evaluation [protocol](docs/randomized_eval_protocol.md) / [report](docs/randomized_eval_results.md) / [queries](docs/randomized_eval_queries.csv) / [planning](docs/randomized_eval_planning.csv) / [tracking](docs/randomized_eval_tracking.csv) · [multi-scene report](docs/multi_query_results.md) · [planning CSV](docs/multi_query_planning.csv) · [tracking CSV](docs/multi_query_tracking.csv) · attached payload [protocol](docs/attached_payload_protocol.md) / [results](docs/attached_payload_results.md) · corner-stop [protocol](docs/corner_stop_protocol.md) / [results](docs/corner_stop_results.md) · [robustness report](docs/robustness_results.md) · [main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain) · [citation](CITATION.cff)
+**Evidence index (simulation; sampled where collision claims are involved; no hardware validation):** randomized evaluation [protocol](docs/randomized_eval_protocol.md) / [report](docs/randomized_eval_results.md) / [queries](docs/randomized_eval_queries.csv) / [planning](docs/randomized_eval_planning.csv) / [tracking](docs/randomized_eval_tracking.csv) · independent planner [protocol](docs/oxmpl_baseline_protocol.md) / [report](docs/oxmpl_baseline_results.md) / [paired CSV](docs/oxmpl_baseline_results.csv) / [validation](docs/oxmpl_baseline_validation.md) · [multi-scene report](docs/multi_query_results.md) · [planning CSV](docs/multi_query_planning.csv) · [tracking CSV](docs/multi_query_tracking.csv) · attached payload [protocol](docs/attached_payload_protocol.md) / [results](docs/attached_payload_results.md) · corner-stop [protocol](docs/corner_stop_protocol.md) / [results](docs/corner_stop_results.md) · [robustness report](docs/robustness_results.md) · [main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain) · [citation](CITATION.cff)
 
 ![Demo 3 — UR5e pick-and-place around a pillar. IK, RRT-Connect, corner-stop S-curves, PD + velocity feedforward](docs/demo3.gif)
 
@@ -58,6 +58,12 @@ Position PD meets the numeric gates in **0/18** tracking cases. Desired-velocity
 
 Both nominal controllers replay every successful canonical trajectory. Position PD meets the numeric gates in **0/138** cases. Velocity feedforward meets them in **104/138** (75.4%, 95% Wilson 67.6--81.8%) and passes the added zero-sampled-penetration gate in **90/138** (65.2%, 95% Wilson 57.0--72.7%). Thirty-seven of 276 controller replays contain sampled penetration, with 3.2141 mm maximum depth; these failures are retained rather than hidden. See the pre-result [protocol](docs/randomized_eval_protocol.md), generated [report](docs/randomized_eval_results.md), and complete [query](docs/randomized_eval_queries.csv), [planning](docs/randomized_eval_planning.csv), and [tracking](docs/randomized_eval_tracking.csv) CSVs. The generator is uniform in compiled joint limits under the stated conditions, not uniform in Cartesian workspace or representative of real tasks; collision checks remain discrete and all evidence is simulation-only.
 
+## Independent planner cross-check (simulation)
+
+An outcome-blind [protocol](docs/oxmpl_baseline_protocol.md) pins independently maintained **OxMPL 0.6.0** before comparing its RRT-Connect implementation with the committed in-repository rows on all 217 blocked-direct queries and the same five seeds. The in-repository planner succeeds on **271/1,085** paired trials; OxMPL succeeds on **290/1,085**. The paired cells are 271 both, 0 in-repository only, 19 OxMPL only, and 795 neither. The predeclared exact two-sided McNemar/binomial calculation is 0.00000381, but it is descriptive only: five seeds share each query, violating independent-pair assumptions. At the query level, at least one seed succeeds for 56/217 blocked queries in-repository and 58/217 with OxMPL.
+
+Every nominal external path is rechecked with a fresh arm-lab collision checker at 0.05-rad spacing: **290/290 pass**, with zero invalid-path outcomes. Two consecutive full runs on the recorded Fedora/Ryzen host agree in every status and path digest after normalizing wall time. This corroborates every in-repository success in the frozen sample and shows limited complementary recovery, but it is not a compute-matched or universal planner ranking: the in-repository artifact uses 2,000 iterations, OxMPL uses a predeclared 250-ms timeout, and the external evaluator consumes the eight-decimal serialized query vectors. The integer seeds and replicate indices are paired, but the two planners use different PRNGs and therefore do not receive identical random samples. See the generated [report](docs/oxmpl_baseline_results.md), complete [1,085-row paired CSV](docs/oxmpl_baseline_results.csv), and [validation record](docs/oxmpl_baseline_validation.md).
+
 ## Layout
 
 ```
@@ -105,6 +111,10 @@ cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
 # predeclared 300-query randomized evaluation; write or verify all raw outcomes
 cargo run --release -p arm-lab-demo --bin randomized_eval -- --write
 cargo run --release -p arm-lab-demo --bin randomized_eval -- --check
+
+# independent external RRT-Connect baseline; full pinned-host repeat or fast artifact audit
+cargo run --release -p arm-lab-demo --bin oxmpl_baseline -- --check
+cargo run --release -p arm-lab-demo --bin oxmpl_baseline -- --verify-artifacts
 ```
 
 Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time. Set `MUJOCO_DOWNLOAD_DIR` to an absolute directory before building and add its downloaded `lib/` directory to `LD_LIBRARY_PATH` before running; see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs).
@@ -131,9 +141,10 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - [x] Multi-scene, multi-query planning and tracking extension with raw CSVs
 - [x] Pair-scoped attached-cube collision proxy for Demo 3 carry
 - [x] Predeclared 300-query randomized planning and nominal-tracking evaluation
+- [x] Predeclared independent OxMPL comparison on all 217 blocked randomized queries
 
 ## License & assets
 
-Code: Apache-2.0. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`. `scene_cluttered.xml` and `scene_pickplace.xml` are original to this repo.
+Project code: Apache-2.0. The separate comparison executable depends on non-vendored [OxMPL 0.6.0](https://github.com/juniorsundar/oxmpl) under BSD-3-Clause. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`. `scene_cluttered.xml` and `scene_pickplace.xml` are original to this repo.
 
 Research users can cite the software using [`CITATION.cff`](CITATION.cff).

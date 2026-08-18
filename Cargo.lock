@@ -313,7 +313,10 @@ dependencies = [
  "arm-lab",
  "mujoco-rs",
  "nalgebra 0.35.0",
+ "oxmpl",
+ "rand 0.9.5",
  "rerun",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -5926,6 +5929,18 @@ name = "owo-colors"
 version = "4.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
+
+[[package]]
+name = "oxmpl"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11988e3c34bfcacbc4d96265f1da76f9bd3a30fcc92ad62e4046cc6315e980dc"
+dependencies = [
+ "getrandom 0.3.4",
+ "rand 0.9.5",
+ "rand_chacha",
+ "web-time",
+]
 
 [[package]]
 name = "parking"

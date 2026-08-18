@@ -10,7 +10,10 @@ publish = false
 arm-lab = { path = "../arm-lab" }
 nalgebra = { workspace = true }
 mujoco-rs = { workspace = true, features = ["renderer"] }
+oxmpl = "=0.6.0"
+rand = "=0.9.5"
 rerun = "0.36"
+sha2 = "=0.10.9"
 
 [lints]
 workspace = true
