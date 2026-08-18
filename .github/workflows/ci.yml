@@ -38,12 +38,14 @@ jobs:
         run: |
           export LD_LIBRARY_PATH="$MUJOCO_DOWNLOAD_DIR/mujoco-3.9.0/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cargo test --release -p arm-lab
+          cargo test --release -p arm-lab --example ik_baseline
           cargo test --release -p arm-lab-demo --bin multi_query_bench
           cargo test --release -p arm-lab-demo --bin randomized_eval
           cargo test --release -p arm-lab-demo --bin oxmpl_baseline
           cargo run --release -p arm-lab-demo --bin multi_query_bench -- --check
           cargo run --release -p arm-lab-demo --bin randomized_eval -- --check
           cargo run --release -p arm-lab-demo --bin oxmpl_baseline -- --verify-artifacts
+          cargo run --release -p arm-lab --example ik_baseline -- --check
 
       - name: Build demo (no GL runtime needed to compile)
         run: cargo build --release -p arm-lab-demo

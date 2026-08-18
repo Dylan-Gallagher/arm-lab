@@ -2,13 +2,13 @@
 
 [![Main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain)
 
-A serial-chain manipulator stack whose production algorithms are written **from scratch in Rust** — no ROS, MoveIt, kinematics library, or off-the-shelf production planner. Independently maintained OxMPL is pinned only in a separate evaluation binary for a cross-implementation baseline.
+A serial-chain manipulator stack whose production algorithms are written **from scratch in Rust** — no ROS, MoveIt, kinematics library, or off-the-shelf production planner. Independently maintained OxMPL and `k` are pinned only in separate evaluation targets for cross-implementation baselines.
 
-**Evidence index (simulation; sampled where collision claims are involved; no hardware validation):** randomized evaluation [protocol](docs/randomized_eval_protocol.md) / [report](docs/randomized_eval_results.md) / [queries](docs/randomized_eval_queries.csv) / [planning](docs/randomized_eval_planning.csv) / [tracking](docs/randomized_eval_tracking.csv) · independent planner [protocol](docs/oxmpl_baseline_protocol.md) / [report](docs/oxmpl_baseline_results.md) / [paired CSV](docs/oxmpl_baseline_results.csv) / [validation](docs/oxmpl_baseline_validation.md) · [multi-scene report](docs/multi_query_results.md) · [planning CSV](docs/multi_query_planning.csv) · [tracking CSV](docs/multi_query_tracking.csv) · attached payload [protocol](docs/attached_payload_protocol.md) / [results](docs/attached_payload_results.md) · corner-stop [protocol](docs/corner_stop_protocol.md) / [results](docs/corner_stop_results.md) · [robustness report](docs/robustness_results.md) · [main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain) · [citation](CITATION.cff)
+**Evidence index (simulation; sampled where collision claims are involved; no hardware validation):** independent IK [protocol](docs/ik_baseline_protocol.md) / [report](docs/ik_baseline_results.md) / [targets](docs/ik_baseline_targets.csv) / [results](docs/ik_baseline_results.csv) / [validation](docs/ik_baseline_validation.md) · randomized evaluation [protocol](docs/randomized_eval_protocol.md) / [report](docs/randomized_eval_results.md) / [queries](docs/randomized_eval_queries.csv) / [planning](docs/randomized_eval_planning.csv) / [tracking](docs/randomized_eval_tracking.csv) · independent planner [protocol](docs/oxmpl_baseline_protocol.md) / [report](docs/oxmpl_baseline_results.md) / [paired CSV](docs/oxmpl_baseline_results.csv) / [validation](docs/oxmpl_baseline_validation.md) · [multi-scene report](docs/multi_query_results.md) · [planning CSV](docs/multi_query_planning.csv) · [tracking CSV](docs/multi_query_tracking.csv) · attached payload [protocol](docs/attached_payload_protocol.md) / [results](docs/attached_payload_results.md) · corner-stop [protocol](docs/corner_stop_protocol.md) / [results](docs/corner_stop_results.md) · [robustness report](docs/robustness_results.md) · [main CI](https://github.com/Dylan-Gallagher/arm-lab/actions/workflows/ci.yml?query=branch%3Amain) · [citation](CITATION.cff)
 
 ![Demo 3 — UR5e pick-and-place around a pillar. IK, RRT-Connect, corner-stop S-curves, PD + velocity feedforward](docs/demo3.gif)
 
-The kinematic chain (offsets, joint axes, limits, end-effector site) is **extracted from the compiled MuJoCo model** — never hand-entered as DH parameters — so the geometry used by the algorithms is guaranteed identical to the one the physics simulates. Forward kinematics, geometric Jacobians, damped-least-squares inverse kinematics, RRT-Connect with shortcutting, and rest-to-rest 7-phase S-curves on every shortcut edge are implemented in this repo. Robot collision checks call `mj_collision` on interpolated joint-space states; Demo 3 additionally uses explicit, pair-scoped `mj_geomDistance` queries for an EE-attached cube proxy. The independent `k` + `urdf-rs` stack is used **only inside the test suite** as a cross-check of FK.
+The kinematic chain (offsets, joint axes, limits, end-effector site) is **extracted from the compiled MuJoCo model** — never hand-entered as DH parameters — so the geometry used by the algorithms is guaranteed identical to the one the physics simulates. Forward kinematics, geometric Jacobians, damped-least-squares inverse kinematics, RRT-Connect with shortcutting, and rest-to-rest 7-phase S-curves on every shortcut edge are implemented in this repo. Robot collision checks call `mj_collision` on interpolated joint-space states; Demo 3 additionally uses explicit, pair-scoped `mj_geomDistance` queries for an EE-attached cube proxy. The independent `k` + `urdf-rs` stack is used only in test/evaluation targets to cross-check FK and IK; no production library path calls it.
 
 Demo 3 (above): IK solves pick and place poses; the joint-space straight line between them violates both the robot predicate and the attached cube's 5 mm pillar margin. Fixed-seed RRT-Connect finds a 6-waypoint sampled-clear carry in **5.4–5.6 ms** across two repeated headless runs; per-edge S-curves execute the carry in **5.13 s** with **0.0022 rad** worst tracking error. Every shortcut corner is a full stop, making position, velocity, and acceleration continuous while keeping joint jerk bounded almost everywhere. The motion is not geometrically blended or time-optimal. The cube is a mocap weld (scripted attach, not contact-rich grasping). Demo 2 (pillar dodge, no object) is in [`docs/demo2.gif`](docs/demo2.gif). Demo 1 (IK target sequence) is in [`docs/demo1.gif`](docs/demo1.gif).
 
@@ -16,8 +16,11 @@ Demo 3 (above): IK solves pick and place poses; the joint-space straight line be
 
 | Metric | Result |
 |---|---|
-| IK success, 1000 random reachable targets (full 6-DOF pose task, cold start from home) | **97.8%** |
-| Mean IK iterations to converge | 20.7 |
+| IK success, 1000 random reachable targets (full 6-DOF pose task, home then ≤8 seeded restarts) | **97.8%** |
+| Same arm-lab cohort, home only / no restart | **71.3%** |
+| Independent `k` Jacobian IK, same targets and ≤8 restart starts | **71.8%** |
+| Restart-enabled union solved by arm-lab or `k` | **98.2%** |
+| Mean iterations reported for arm-lab's returned/final attempt | 20.7 (excludes preceding failed attempts) |
 | FK vs independent `k`/`urdf-rs` chain (random configurations) | agreement to < 1e-9 |
 | FK vs MuJoCo body/site poses (random configurations) | agreement to < 1e-9 |
 | Geometric Jacobian vs numerical differentiation | agreement to < 1e-5 |
@@ -33,6 +36,12 @@ Demo 3 (above): IK solves pick and place poses; the joint-space straight line be
 | Demo 3 tracking (full pick-and-place, two repeated headless runs) | worst 0.0022 rad |
 
 The 1 s median planning-time exit criterion is met by two orders of magnitude. The IK stress test samples targets from valid random joint configurations; the 2.2% non-converged slice is reported without assigning an untested cause. The solver honors limits by construction (clamped every iteration, asserted in tests).
+
+## Independent IK cross-check (simulation)
+
+The [pre-result protocol](docs/ik_baseline_protocol.md) recreates the existing 1,000-target full-pose cohort instead of selecting a new sample. The 97.8% restart-enabled arm-lab control was already known and is labeled non-blind. Removing restarts reduces arm-lab to **713/1,000**; the eight deterministic restarts recover 265 additional targets for **978/1,000**. Independently maintained `k` 0.32.0 solves **328/1,000** from home and **718/1,000** with the same eight restart joint vectors.
+
+Among restart-enabled outcomes, both implementations solve 714 targets, arm-lab alone solves 264, `k` alone solves four, and neither solves 18; the union is **982/1,000**. The exact two-sided sign/McNemar calculation on 268 discordant targets is `8.998e-73`, labeled descriptive for this single deterministic cohort. Maximum starts and iterations per start are matched, but update rules, damping, early stopping, and per-iteration work differ, so this is not a compute or runtime ranking. Every success is rechecked through arm-lab FK at `<1e-4 m` and `<1e-3 rad` within compiled limits. The complete [targets](docs/ik_baseline_targets.csv), [4,000 result rows](docs/ik_baseline_results.csv), generated [report](docs/ik_baseline_results.md), and [validation record](docs/ik_baseline_validation.md) retain all failures and the four independent-only recoveries. Targets are reachable by construction but collision-unaware and not Cartesian-uniform; the evidence supports no hardware, workspace-wide, or universal solver claim.
 
 ## Robustness envelope (simulation)
 
@@ -115,6 +124,10 @@ cargo run --release -p arm-lab-demo --bin randomized_eval -- --check
 # independent external RRT-Connect baseline; full pinned-host repeat or fast artifact audit
 cargo run --release -p arm-lab-demo --bin oxmpl_baseline -- --check
 cargo run --release -p arm-lab-demo --bin oxmpl_baseline -- --verify-artifacts
+
+# independent IK baseline + restart ablation; write or byte-check all 4,000 rows
+cargo run --release -p arm-lab --example ik_baseline -- --write
+cargo run --release -p arm-lab --example ik_baseline -- --check
 ```
 
 Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PATH. On Linux without system MuJoCo, `mujoco-rs` auto-downloads MuJoCo 3.9 at build time. Set `MUJOCO_DOWNLOAD_DIR` to an absolute directory before building and add its downloaded `lib/` directory to `LD_LIBRARY_PATH` before running; see the [mujoco-rs docs](https://github.com/davidhozic/mujoco-rs).
@@ -142,9 +155,10 @@ Requirements: Rust stable, a C++ toolchain, and (for `--render`) `ffmpeg` on PAT
 - [x] Pair-scoped attached-cube collision proxy for Demo 3 carry
 - [x] Predeclared 300-query randomized planning and nominal-tracking evaluation
 - [x] Predeclared independent OxMPL comparison on all 217 blocked randomized queries
+- [x] Predeclared independent `k` IK comparison and restart ablation on 1,000 targets
 
 ## License & assets
 
-Project code: Apache-2.0. The separate comparison executable depends on non-vendored [OxMPL 0.6.0](https://github.com/juniorsundar/oxmpl) under BSD-3-Clause. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`. `scene_cluttered.xml` and `scene_pickplace.xml` are original to this repo.
+Project code: Apache-2.0. The separate planner comparison executable depends on non-vendored [OxMPL 0.6.0](https://github.com/juniorsundar/oxmpl) under BSD-3-Clause. The test/evaluation-only IK comparison uses non-vendored `k` 0.32.0 and `urdf-rs` 0.9.0, both Apache-2.0. The vendored `assets/ur5e` model and meshes are from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (UR5e description © 2018 ROS Industrial Consortium, BSD-3; see `assets/ur5e/LICENSE`), with a local modification adding offscreen buffer size to `scene.xml`. `scene_cluttered.xml` and `scene_pickplace.xml` are original to this repo.
 
 Research users can cite the software using [`CITATION.cff`](CITATION.cff).
