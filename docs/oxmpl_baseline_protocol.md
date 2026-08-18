@@ -53,7 +53,8 @@ Use the crates.io package `oxmpl` exactly at version `0.6.0` (BSD-3-Clause):
 
 For every trial:
 
-- construct `RealVectorStateSpace` from the compiled UR5e joint limits;
+- construct `RealVectorStateSpace` from the compiled UR5e joint limits with
+  the same 0.05-rad inset used by the in-repository planner's uniform sampler;
 - use the exact frozen start and point goal;
 - use the repository's unchanged MuJoCo emitted-contact state predicate;
 - set OxMPL maximum extension distance to 0.25 rad and goal bias to 0.05;
