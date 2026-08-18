@@ -13,8 +13,8 @@ mujoco-rs = { workspace = true }
 [dev-dependencies]
 # Cross-check dependencies: used ONLY in tests to validate the in-repo
 # implementations against an independent reference, never in the library.
-k = "0.32"
-urdf-rs = "0.9"
+k = "=0.32.0"
+urdf-rs = "=0.9.0"
 
 [lints]
 workspace = true
